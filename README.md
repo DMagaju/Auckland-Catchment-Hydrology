@@ -35,7 +35,7 @@ A QGIS plugin providing a complete hydrology workflow for subcatchment delineati
 3. Click **Install**
 
 ### From ZIP
-1. Download the latest ZIP from [Releases](https://github.com/DMagaju/Catchment-Assessment/releases)
+1. Download the latest ZIP from [Releases](https://github.com/DMagaju/Auckland-Catchment-Hydrology/releases)
 2. In QGIS → **Plugins → Manage and Install Plugins → Install from ZIP**
 
 ## LINZ API Key
@@ -72,8 +72,8 @@ Dipendra Magaju — [dipen.magaju@gmail.com](mailto:dipen.magaju@gmail.com)
 
 ## Repository
 
-[https://github.com/DMagaju/Catchment-Assessment](https://github.com/DMagaju/Catchment-Assessment)
+[https://github.com/DMagaju/Auckland-Catchment-Hydrology](https://github.com/DMagaju/Auckland-Catchment-Hydrology)
 
 ## Issues
 
-[https://github.com/DMagaju/Catchment-Assessment/issues](https://github.com/DMagaju/Catchment-Assessment/issues)
+[https://github.com/DMagaju/Auckland-Catchment-Hydrology/issues](https://github.com/DMagaju/Auckland-Catchment-Hydrology/issues)
