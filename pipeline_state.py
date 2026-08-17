@@ -1,0 +1,48 @@
+# -*- coding: utf-8 -*-
+"""
+Shared pipeline state store for Auckland Catchment & Hydrology.
+
+Each dialog saves its output layer names here after a run so subsequent
+dialogs can auto-populate their input combos when their tab is shown.
+
+Keys
+----
+dem              Raw DEM loaded by Download DEM
+burned_dem       Conditioned DEM from DEM Channel Burn
+drainage         Drainage Direction raster from Stream Catchment
+accumulation     Flow Accumulation raster from Stream Catchment
+streams          Streams line layer from Stream Catchment
+subcatchments    Sub-Catchments polygon from Stream Catchment Generate
+catchments       Current "best" catchment layer (updated by Outlet / Merge / Naming)
+flow_paths       Longest Flow Path line layer
+slope_catchments Subcatchments after Slope Calculation
+toc_catchments   Subcatchments after Time of Concentration
+flow_catchments  Subcatchments after Flow Calculation [TP108]
+"""
+
+from qgis.core import QgsSettings, QgsProject
+
+_GROUP = 'hydrology_pipeline'
+
+
+def save_pipeline_state(key: str, value: str):
+    QgsSettings().setValue(f'{_GROUP}/{key}', value)
+
+
+def get_pipeline_state(key: str) -> str:
+    return QgsSettings().value(f'{_GROUP}/{key}', '') or ''
+
+
+def set_combo_to_layer(combo, *keys) -> bool:
+    """
+    Set a QgsMapLayerComboBox to the first pipeline layer found for any key.
+    Tries keys in priority order. Returns True if a match was found.
+    """
+    for key in keys:
+        name = get_pipeline_state(key)
+        if name:
+            layers = QgsProject.instance().mapLayersByName(name)
+            if layers:
+                combo.setLayer(layers[0])
+                return True
+    return False
