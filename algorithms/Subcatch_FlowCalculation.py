@@ -9,7 +9,7 @@ Tested On: QGIS 3.44.2
 __author__     = "Dipendra Magaju"
 __copyright__  = "2026"
 __license__    = "GPL"
-__version__    = "V02"
+__version__    = "V03"
 __status__     = "Stable"
 _LINKED_PROMPT = "SCH_SubcatchFlowCalculationToolDevelopmentPrompt_GM.txt"
 
@@ -22,6 +22,7 @@ from qgis.core import (
     QgsProcessingParameterEnum,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterString,
+    QgsProcessingParameterDateTime,
     QgsProcessingParameterFolderDestination,
     QgsProcessingParameterVectorDestination,
     QgsProcessingException,
@@ -43,6 +44,8 @@ class SubcatchFlowCalculationAlgorithm(QgsProcessingAlgorithm):
     FIELD_IMP            = 'FIELD_IMP'
     FIELD_ID             = 'FIELD_ID'
     RAINFALL_DEPTH       = 'RAINFALL_DEPTH'
+    AEP_EVENT            = 'AEP_EVENT'
+    CC_SCENARIO          = 'CC_SCENARIO'
     STORM_LABEL          = 'STORM_LABEL'
     EVENT_DATE           = 'EVENT_DATE'
     OUTPUT_MODE          = 'OUTPUT_MODE'
@@ -50,32 +53,45 @@ class SubcatchFlowCalculationAlgorithm(QgsProcessingAlgorithm):
     OUTPUT_FOLDER        = 'OUTPUT_FOLDER'
     OUTPUT_LAYER         = 'OUTPUT_LAYER'
 
+    AEP_OPTIONS         = ['50%', '20%', '10%', '5%', '2%', '1%']
+    CC_OPTIONS          = ['Existing', '2.1°C', '3.8°C']
     OUTPUT_MODE_OPTIONS = [
         'New output layer',
         'Edit input layer in-place',
         'CSV & Plots only (no vector layer)',
+        'Rainfall Only (no catchment layer)',
     ]
 
-    # TP108 Table 2 — normalised 24-hour temporal profile (Existing column).
-    # (count, factor): number of 10-min blocks at that intensity multiplier.
-    # Apply AEP and climate-change depth adjustments to the depth BEFORE entry.
+    # TP108 Table 1 — % increase in 24-hour rainfall depth for climate change.
+    _TABLE_1 = {
+        '50%': {'2.1°C': 15.1, '3.8°C': 27.4},
+        '20%': {'2.1°C': 16.4, '3.8°C': 29.6},
+        '10%': {'2.1°C': 17.0, '3.8°C': 30.8},
+        '5%':  {'2.1°C': 17.2, '3.8°C': 31.2},
+        '2%':  {'2.1°C': 17.6, '3.8°C': 31.9},
+        '1%':  {'2.1°C': 18.1, '3.8°C': 32.7},
+    }
+
+    # TP108 Table 2 — normalised 24-hour temporal profile.
+    # (count, existing_factor, cc2.1_factor, cc3.8_factor): number of
+    # 10-min blocks at that intensity multiplier, per climate scenario.
     _PROFILE = [
-        (36, 0.34),
-        (18, 0.74),
-        ( 6, 0.96),
-        ( 6, 1.40),
-        ( 3, 2.20),
-        ( 1, 3.80),
-        ( 1, 4.80),
-        ( 1, 8.70),
-        ( 1,16.20),   # peak
-        ( 1, 5.90),
-        ( 1, 4.20),
-        ( 3, 2.90),
-        ( 6, 1.70),
-        ( 6, 1.20),
-        (18, 0.75),
-        (36, 0.40),
+        (36, 0.34, 0.29, 0.27),
+        (18, 0.74, 0.69, 0.66),
+        ( 6, 0.96, 0.89, 0.85),
+        ( 6, 1.40, 1.40, 1.40),
+        ( 3, 2.20, 2.30, 2.36),
+        ( 1, 3.80, 4.14, 4.35),
+        ( 1, 4.80, 5.23, 5.50),
+        ( 1, 8.70, 9.49, 9.97),
+        ( 1,16.20,17.66,18.56),   # peak
+        ( 1, 5.90, 6.43, 6.76),
+        ( 1, 4.20, 4.58, 4.81),
+        ( 3, 2.90, 3.08, 3.20),
+        ( 6, 1.70, 1.75, 1.77),
+        ( 6, 1.20, 1.16, 1.14),
+        (18, 0.75, 0.72, 0.70),
+        (36, 0.40, 0.36, 0.34),
     ]
 
     def tr(self, string):
@@ -105,21 +121,22 @@ class SubcatchFlowCalculationAlgorithm(QgsProcessingAlgorithm):
             "Author: Dipendra Magaju  |  Tested On: QGIS 3.44.2\n\n"
             "Calculates peak flow and complete flow hydrograph for each subcatchment "
             "using Auckland TP108 rainfall-runoff methodology with SCS Curve Number losses.\n\n"
-            "Design-storm approach:\n"
-            "  Enter the FINAL 24-hour design rainfall depth in mm.\n"
-            "  Apply AEP and climate-change adjustments BEFORE entering the value.\n"
-            "  The TP108 Table 2 temporal profile distributes this depth across\n"
-            "  144 × 10-minute intervals.\n\n"
+            "Rainfall:\n"
+            "  Enter the EXISTING 24-hour design rainfall depth in mm, then select the\n"
+            "  AEP Event and Climate Change Scenario. The depth is scaled using TP108\n"
+            "  Table 1, then distributed across 144 × 10-minute intervals using the\n"
+            "  TP108 Table 2 temporal profile for the selected scenario.\n\n"
             "Event identification:\n"
-            "  • Storm Event Label — free text, e.g. '1% AEP CC3.8 Design Storm'\n"
-            "  • Event Date        — date in YYYY-MM-DD format; used in filenames\n\n"
+            "  • Storm Event Label — free text, e.g. 'Design Storm A'\n"
+            "  • Event Date        — date picker; used in filenames\n\n"
             "Output modes:\n"
             "  0 — New output layer (+ CSVs & plots)\n"
             "  1 — Edit input layer in-place (+ CSVs & plots)\n"
             "  2 — CSV & Plots only, no vector layer output\n\n"
             "  Tick 'Export Rainfall CSV' in any mode to also save the 10-minute\n"
-            "  rainfall time series to Rainfall_{date}_{label}.csv.\n"
-            "  (Mode 2 always exports the rainfall CSV.)\n\n"
+            "  rainfall time series to Rainfall_{tag}.csv, plus a 2-column\n"
+            "  RainfallForTUFLOWInput_{tag}.csv (Time_hr, Rainfall_mm) for TUFLOW.\n"
+            "  (Mode 2 always exports both rainfall CSVs.)\n\n"
             "Notes:\n"
             "  • numpy required (normally bundled with QGIS)\n"
             "  • pandas and matplotlib must be installed for CSV/plot export\n"
@@ -130,8 +147,9 @@ class SubcatchFlowCalculationAlgorithm(QgsProcessingAlgorithm):
     def initAlgorithm(self, config=None):
         self.addParameter(
             QgsProcessingParameterVectorLayer(
-                self.INPUT_LAYER, self.tr('Subcatchment Layer'),
-                types=[QgsProcessing.TypeVectorPolygon]
+                self.INPUT_LAYER, self.tr('Subcatchment Layer (not needed for Rainfall Only)'),
+                types=[QgsProcessing.TypeVectorPolygon],
+                optional=True
             )
         )
         self.addParameter(
@@ -139,7 +157,8 @@ class SubcatchFlowCalculationAlgorithm(QgsProcessingAlgorithm):
                 self.FIELD_AREA, self.tr('Area Field (ha)'),
                 defaultValue='TArea[ha]',
                 parentLayerParameterName=self.INPUT_LAYER,
-                type=QgsProcessingParameterField.Numeric
+                type=QgsProcessingParameterField.Numeric,
+                optional=True
             )
         )
         self.addParameter(
@@ -147,7 +166,8 @@ class SubcatchFlowCalculationAlgorithm(QgsProcessingAlgorithm):
                 self.FIELD_TOC, self.tr('Time of Concentration Field (minutes)'),
                 defaultValue='ToC_min',
                 parentLayerParameterName=self.INPUT_LAYER,
-                type=QgsProcessingParameterField.Numeric
+                type=QgsProcessingParameterField.Numeric,
+                optional=True
             )
         )
         self.addParameter(
@@ -155,7 +175,8 @@ class SubcatchFlowCalculationAlgorithm(QgsProcessingAlgorithm):
                 self.FIELD_CN, self.tr('Curve Number Field (pervious CN)'),
                 defaultValue='PervCN',
                 parentLayerParameterName=self.INPUT_LAYER,
-                type=QgsProcessingParameterField.Numeric
+                type=QgsProcessingParameterField.Numeric,
+                optional=True
             )
         )
         self.addParameter(
@@ -163,7 +184,8 @@ class SubcatchFlowCalculationAlgorithm(QgsProcessingAlgorithm):
                 self.FIELD_IMP, self.tr('Imperviousness Field (%)'),
                 defaultValue='Imperv[%]',
                 parentLayerParameterName=self.INPUT_LAYER,
-                type=QgsProcessingParameterField.Numeric
+                type=QgsProcessingParameterField.Numeric,
+                optional=True
             )
         )
         self.addParameter(
@@ -176,24 +198,36 @@ class SubcatchFlowCalculationAlgorithm(QgsProcessingAlgorithm):
         )
         self.addParameter(
             QgsProcessingParameterNumber(
-                self.RAINFALL_DEPTH, self.tr('Design Storm Rainfall Depth (mm)'),
+                self.RAINFALL_DEPTH, self.tr('Existing 24-hour Rainfall Depth (mm)'),
                 type=QgsProcessingParameterNumber.Double,
                 minValue=0.1, defaultValue=50.0
             )
         )
         self.addParameter(
+            QgsProcessingParameterEnum(
+                self.AEP_EVENT, self.tr('AEP Event'),
+                options=self.AEP_OPTIONS, defaultValue=5   # 1%
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.CC_SCENARIO, self.tr('Climate Change Scenario'),
+                options=self.CC_OPTIONS, defaultValue=0    # Existing
+            )
+        )
+        self.addParameter(
             QgsProcessingParameterString(
                 self.STORM_LABEL,
-                self.tr('Storm Event Label (optional, e.g. "1% AEP CC3.8")'),
+                self.tr('Storm Event Label (optional)'),
                 defaultValue='',
                 optional=True
             )
         )
         self.addParameter(
-            QgsProcessingParameterString(
+            QgsProcessingParameterDateTime(
                 self.EVENT_DATE,
-                self.tr('Event Date (YYYY-MM-DD, optional)'),
-                defaultValue='',
+                self.tr('Event Date (optional)'),
+                type=QgsProcessingParameterDateTime.Date,
                 optional=True
             )
         )
@@ -269,7 +303,8 @@ class SubcatchFlowCalculationAlgorithm(QgsProcessingAlgorithm):
     # ── Per-subcatchment plot ────────────────────────────────────────────────
 
     def _plot_subcatchment(self, catch_id, time_axis, total_flow, flow_imp, flow_perv,
-                           rain_inc, rainfall_depth, storm_label, event_date,
+                           rain_inc, rainfall_depth, aep_str, cc_str, pct_increase,
+                           future_depth, storm_label, event_date,
                            area_ha, peak_flow, total_vol, output_folder, file_tag):
         import numpy as np
         import matplotlib
@@ -289,8 +324,10 @@ class SubcatchFlowCalculationAlgorithm(QgsProcessingAlgorithm):
         )
         fig.suptitle(
             f"Subcatchment Flow Analysis  —  Auckland TP108\n"
-            f"Catchment: {catch_id}   |   Storm: {label_disp}   |   "
-            f"Date: {date_disp}   |   Design Depth: {rainfall_depth:.1f} mm\n"
+            f"Catchment: {catch_id}   |   AEP: {aep_str}   |   CC Scenario: {cc_str}   |   "
+            f"Storm: {label_disp}   |   Date: {date_disp}\n"
+            f"Existing Depth: {rainfall_depth:.1f} mm   |   "
+            f"CC Increment: {pct_increase:.1f}%   |   Design Depth: {future_depth:.1f} mm   |   "
             f"Area: {area_ha:.1f} ha   |   "
             f"Peak Flow: {peak_flow:.3f} m³/s   |   "
             f"Total Volume: {total_vol:,.0f} m³",
@@ -353,6 +390,23 @@ class SubcatchFlowCalculationAlgorithm(QgsProcessingAlgorithm):
         total_s = int(round(h * 3600))
         return f'{total_s // 3600:02d}:{(total_s % 3600) // 60:02d}:{total_s % 60:02d}'
 
+    @staticmethod
+    def _close_rainfall_series(rain_inc, cum_rain):
+        """
+        rain_inc/cum_rain hold 144 × 10-min bins labelled by each bin's START
+        time (0:00 .. 23:50), so the raw series stops at 23:50 rather than
+        24:00. Append a closing point at exactly 24:00 hr (zero incremental
+        rainfall, cumulative held at its final value) so exported CSVs span
+        the full 24-hour storm duration.
+        """
+        import numpy as np
+        dt_hr = 10.0 / 60.0
+        rain_time = np.arange(len(rain_inc)) * dt_hr
+        rt = np.append(rain_time, 24.0)
+        ri = np.append(rain_inc, 0.0)
+        cr = np.append(cum_rain, cum_rain[-1] if len(cum_rain) else 0.0)
+        return rt, ri, cr
+
     # ── Main algorithm ───────────────────────────────────────────────────────
 
     def processAlgorithm(self, parameters, context, feedback):
@@ -376,25 +430,52 @@ class SubcatchFlowCalculationAlgorithm(QgsProcessingAlgorithm):
         field_imp       = self.parameterAsString(parameters, self.FIELD_IMP, context)
         field_id        = self.parameterAsString(parameters, self.FIELD_ID, context) or None
         rainfall_depth  = self.parameterAsDouble(parameters, self.RAINFALL_DEPTH, context)
+        aep_idx         = self.parameterAsEnum(parameters, self.AEP_EVENT, context)
+        cc_idx          = self.parameterAsEnum(parameters, self.CC_SCENARIO, context)
         storm_label     = self.parameterAsString(parameters, self.STORM_LABEL, context).strip()
-        event_date      = self.parameterAsString(parameters, self.EVENT_DATE, context).strip()
+        event_dt        = self.parameterAsDateTime(parameters, self.EVENT_DATE, context)
+        event_date      = event_dt.toString('yyyy-MM-dd') if event_dt.isValid() else ''
         output_mode     = self.parameterAsInt(parameters, self.OUTPUT_MODE, context)
         export_rain_csv = self.parameterAsBool(parameters, self.OUTPUT_RAINFALL_CSV, context)
         output_folder   = self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
 
-        # Mode 2 (CSV & Plots only) always includes rainfall CSV
-        if output_mode == 2:
+        aep_str = self.AEP_OPTIONS[aep_idx]
+        cc_str  = self.CC_OPTIONS[cc_idx]
+
+        # Modes 2 (CSV & Plots only) and 3 (Rainfall Only) always include rainfall CSV
+        if output_mode in (2, 3):
             export_rain_csv = True
 
         save_to_input = (output_mode == 1)
         create_layer  = (output_mode == 0)
+        rainfall_only = (output_mode == 3)
+
+        if not rainfall_only and (source is None or not source.isValid()):
+            raise QgsProcessingException(
+                "A Subcatchment Layer is required unless Output Mode is "
+                "'Rainfall Only (no catchment layer)'."
+            )
+
+        # ── Depth adjustment (TP108 Table 1) ────────────────────────────────
+        if cc_str == 'Existing':
+            pct_increase = 0.0
+            future_depth = rainfall_depth
+        else:
+            pct_increase = self._TABLE_1[aep_str][cc_str]
+            future_depth = rainfall_depth * (1 + pct_increase / 100)
 
         date_tag  = self._safe_tag(event_date.replace('-', ''))  if event_date  else 'NoDate'
-        label_tag = self._safe_tag(storm_label)                   if storm_label else 'Storm'
-        file_tag  = f"{date_tag}_{label_tag}"
+        aep_tag   = aep_str.replace('%', 'pct')
+        cc_tag    = 'Existing' if cc_str == 'Existing' else f"CC{cc_str.replace('°C', '')}"
+        label_tag = self._safe_tag(storm_label) if storm_label else ''
+        file_tag  = f"{date_tag}_{aep_tag}_{cc_tag}" + (f"_{label_tag}" if label_tag else "")
 
         feedback.pushInfo("─" * 55)
-        feedback.pushInfo(f"  Design Depth    : {rainfall_depth:.1f} mm")
+        feedback.pushInfo(f"  AEP             : {aep_str}")
+        feedback.pushInfo(f"  CC Scenario     : {cc_str}")
+        feedback.pushInfo(f"  Existing Depth  : {rainfall_depth:.1f} mm")
+        feedback.pushInfo(f"  CC Increment    : {pct_increase:.1f}%")
+        feedback.pushInfo(f"  Design Depth    : {future_depth:.3f} mm")
         feedback.pushInfo(f"  Storm Label     : {storm_label or '—'}")
         feedback.pushInfo(f"  Event Date      : {event_date or '—'}")
         feedback.pushInfo(f"  Output Mode     : {self.OUTPUT_MODE_OPTIONS[output_mode]}")
@@ -402,14 +483,41 @@ class SubcatchFlowCalculationAlgorithm(QgsProcessingAlgorithm):
         feedback.pushInfo(f"  File Tag        : {file_tag}")
         feedback.pushInfo("─" * 55)
 
-        # ── Build rainfall series ─────────────────────────────────────────
-        total_factor = sum(count * factor for count, factor in self._PROFILE)
+        # ── Build rainfall series (scenario-specific column) ────────────────
+        col          = {'Existing': 1, '2.1°C': 2, '3.8°C': 3}[cc_str]
+        total_factor = sum(row[0] * row[col] for row in self._PROFILE)
         rain_inc     = np.array([
-            (rainfall_depth / total_factor) * factor
-            for count, factor in self._PROFILE
-            for _ in range(count)
+            (future_depth / total_factor) * row[col]
+            for row in self._PROFILE
+            for _ in range(row[0])
         ])
         cum_rain = np.cumsum(rain_inc)
+
+        # ── Rainfall Only (mode 3): no catchment layer needed ───────────────
+        if rainfall_only:
+            os.makedirs(output_folder, exist_ok=True)
+            rt, ri, cr = self._close_rainfall_series(rain_inc, cum_rain)
+
+            df_rain = pd.DataFrame({
+                'Time':           [self._hr_to_hhmmss(h) for h in rt],
+                'Time_hr':        np.round(rt, 4),
+                'Incremental_mm': np.round(ri, 4),
+                'Cumulative_mm':  np.round(cr, 4),
+            })
+            rain_csv_path = os.path.join(output_folder, f"Rainfall_{file_tag}.csv")
+            df_rain.to_csv(rain_csv_path, index=False)
+            feedback.pushInfo(f"Rainfall CSV  → {rain_csv_path}")
+
+            df_tuflow = pd.DataFrame({
+                'Time_hr':     np.round(rt, 4),
+                'Rainfall_mm': np.round(ri, 4),
+            })
+            tuflow_csv_path = os.path.join(output_folder, f"RainfallForTUFLOWInput_{file_tag}.csv")
+            df_tuflow.to_csv(tuflow_csv_path, index=False)
+            feedback.pushInfo(f"TUFLOW Rainfall CSV  → {tuflow_csv_path}")
+
+            feedback.setProgress(100)
+            return {}
 
         # ── Output sink (mode 0) ──────────────────────────────────────────
         sink    = None
@@ -459,17 +567,26 @@ class SubcatchFlowCalculationAlgorithm(QgsProcessingAlgorithm):
 
         # ── Export rainfall CSV ───────────────────────────────────────────
         if export_rain_csv:
-            dt_hr     = 10.0 / 60.0
-            rain_time = np.arange(len(rain_inc)) * dt_hr
-            df_rain   = pd.DataFrame({
-                'Time':            [self._hr_to_hhmmss(h) for h in rain_time],
-                'Time_hr':         np.round(rain_time, 4),
-                'Incremental_mm':  np.round(rain_inc, 4),
-                'Cumulative_mm':   np.round(cum_rain, 4),
+            rt, ri, cr = self._close_rainfall_series(rain_inc, cum_rain)
+            df_rain    = pd.DataFrame({
+                'Time':            [self._hr_to_hhmmss(h) for h in rt],
+                'Time_hr':         np.round(rt, 4),
+                'Incremental_mm':  np.round(ri, 4),
+                'Cumulative_mm':   np.round(cr, 4),
             })
             rain_csv_path = os.path.join(output_folder, f"Rainfall_{file_tag}.csv")
             df_rain.to_csv(rain_csv_path, index=False)
             feedback.pushInfo(f"Rainfall CSV  → {rain_csv_path}")
+
+            # TUFLOW rainfall boundary input — Time (hr), Rainfall (mm), same
+            # 10-min interval, no header extras.
+            df_tuflow = pd.DataFrame({
+                'Time_hr':     np.round(rt, 4),
+                'Rainfall_mm': np.round(ri, 4),
+            })
+            tuflow_csv_path = os.path.join(output_folder, f"RainfallForTUFLOWInput_{file_tag}.csv")
+            df_tuflow.to_csv(tuflow_csv_path, index=False)
+            feedback.pushInfo(f"TUFLOW Rainfall CSV  → {tuflow_csv_path}")
 
         # ── Iterate subcatchments ─────────────────────────────────────────
         for i, feat in enumerate(source.getFeatures()):
@@ -526,7 +643,8 @@ class SubcatchFlowCalculationAlgorithm(QgsProcessingAlgorithm):
                 try:
                     self._plot_subcatchment(
                         catch_id, time_axis, total_flow, flow_imp, flow_perv,
-                        rain_inc, rainfall_depth, storm_label, event_date,
+                        rain_inc, rainfall_depth, aep_str, cc_str, pct_increase,
+                        future_depth, storm_label, event_date,
                         area_ha, peak_flow, total_vol, output_folder, file_tag
                     )
                 except Exception as exc:

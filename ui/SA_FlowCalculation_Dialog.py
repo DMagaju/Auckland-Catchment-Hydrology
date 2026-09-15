@@ -2,18 +2,18 @@
 """Dock tab — Subcatchment Flow Calculation (Auckland TP108)."""
 
 __author__  = "Dipendra Magaju"
-__version__ = "V02"
+__version__ = "V03"
 
 import os
 import traceback
 
-from qgis.PyQt.QtCore import Qt
-from qgis.PyQt.QtGui import QIcon
+from qgis.PyQt.QtCore import Qt, QDate, QTime, QDateTime
+from qgis.PyQt.QtGui import QIcon, QPalette, QColor
 from qgis.PyQt.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QToolButton, QProgressBar,
-    QComboBox, QDoubleSpinBox, QMessageBox, QCheckBox, QLineEdit,
-    QFrame, QScrollArea, QDialog, QApplication,
+    QComboBox, QDoubleSpinBox, QMessageBox, QCheckBox, QLineEdit, QDateEdit,
+    QFrame, QScrollArea, QDialog, QApplication, QStyleFactory, QCalendarWidget,
 )
 from qgis.core import (
     QgsMapLayerProxyModel, QgsProject, QgsMapLayer,
@@ -51,17 +51,101 @@ try:
 except AttributeError:
     _POLYGON_FILTER = QgsMapLayerProxyModel.PolygonLayer
 
+try:
+    _PAL_WINDOW          = QPalette.ColorRole.Window
+    _PAL_BASE            = QPalette.ColorRole.Base
+    _PAL_BUTTON          = QPalette.ColorRole.Button
+    _PAL_ALT_BASE        = QPalette.ColorRole.AlternateBase
+    _PAL_WINDOW_TEXT     = QPalette.ColorRole.WindowText
+    _PAL_TEXT            = QPalette.ColorRole.Text
+    _PAL_BUTTON_TEXT     = QPalette.ColorRole.ButtonText
+    _PAL_HIGHLIGHT       = QPalette.ColorRole.Highlight
+    _PAL_HIGHLIGHTED_TXT = QPalette.ColorRole.HighlightedText
+except AttributeError:
+    _PAL_WINDOW          = QPalette.Window
+    _PAL_BASE            = QPalette.Base
+    _PAL_BUTTON          = QPalette.Button
+    _PAL_ALT_BASE        = QPalette.AlternateBase
+    _PAL_WINDOW_TEXT     = QPalette.WindowText
+    _PAL_TEXT            = QPalette.Text
+    _PAL_BUTTON_TEXT     = QPalette.ButtonText
+    _PAL_HIGHLIGHT       = QPalette.Highlight
+    _PAL_HIGHLIGHTED_TXT = QPalette.HighlightedText
+
 _WIDGET_STYLE = """
-    QgsMapLayerComboBox, QComboBox, QDoubleSpinBox, QSpinBox, QLineEdit {
+    QgsMapLayerComboBox, QComboBox, QDoubleSpinBox, QSpinBox, QLineEdit, QDateEdit {
         background-color: white; color: black;
         border: 1px solid #B0BEC5; border-radius: 3px;
         padding: 2px 4px; font-size: 11px;
     }
-    QComboBox::drop-down { border: none; }
+    QComboBox::drop-down, QDateEdit::drop-down { border: none; }
     QgsFieldComboBox { background-color: white; color: black;
         border: 1px solid #B0BEC5; border-radius: 3px;
         padding: 2px 4px; font-size: 11px; }
+    QgsFileWidget QToolButton, QgsFileWidget QLineEdit {
+        background-color: white; color: black;
+        border: 1px solid #B0BEC5; border-radius: 3px;
+    }
 """
+
+
+_CALENDAR_QSS = """
+    QCalendarWidget, QCalendarWidget QWidget {
+        background-color: white; color: #212121;
+    }
+    QCalendarWidget QToolButton {
+        background-color: white; color: #212121; border: none;
+        icon-size: 18px, 18px; padding: 3px;
+    }
+    QCalendarWidget QToolButton:hover { background-color: #EEF4FF; }
+    QCalendarWidget QMenu { background-color: white; color: #212121; }
+    QCalendarWidget QSpinBox {
+        background-color: white; color: #212121; border: 1px solid #B0BEC5;
+    }
+    QCalendarWidget QWidget#qt_calendar_navigationbar { background-color: #F5F5F5; }
+    QCalendarWidget QAbstractItemView:enabled {
+        background-color: white; color: #212121;
+        selection-background-color: #1565C0; selection-color: white;
+    }
+    QCalendarWidget QAbstractItemView:disabled { color: #B0BEC5; }
+"""
+
+
+_fusion_style_refs = []   # keep Fusion QStyle instances alive — PyQt drops
+                           # unreferenced QStyle objects, which crashes/reverts
+                           # the widget back to the native style silently
+
+
+def _whiten_calendar(cal):
+    """
+    Force a plain white/black calendar popup regardless of the active Qt
+    style or system dark theme. On Windows the native style paints many
+    calendar sub-widgets (nav toolbuttons, spin box) via the OS theme engine
+    and ignores both QPalette and QSS. Forcing the Fusion style — a fully
+    Qt-drawn, software style — is what actually makes palette/QSS overrides
+    take effect; palette and QSS are layered on top as belt-and-suspenders.
+    """
+    fusion = QStyleFactory.create('Fusion')
+    if fusion is not None:
+        _fusion_style_refs.append(fusion)
+        cal.setStyle(fusion)
+        for child in cal.findChildren(QWidget):
+            child.setStyle(fusion)
+
+    pal = cal.palette()
+    for role in (_PAL_WINDOW, _PAL_BASE, _PAL_BUTTON, _PAL_ALT_BASE):
+        pal.setColor(role, QColor('white'))
+    for role in (_PAL_WINDOW_TEXT, _PAL_TEXT, _PAL_BUTTON_TEXT):
+        pal.setColor(role, QColor('black'))
+    pal.setColor(_PAL_HIGHLIGHT, QColor('#1565C0'))
+    pal.setColor(_PAL_HIGHLIGHTED_TXT, QColor('white'))
+
+    cal.setAutoFillBackground(True)
+    cal.setPalette(pal)
+    cal.setStyleSheet(_CALENDAR_QSS)
+    for child in cal.findChildren(QWidget):
+        child.setAutoFillBackground(True)
+        child.setPalette(pal)
 
 _HELP = {
     'tool': (
@@ -71,9 +155,10 @@ _HELP = {
         "• Rainfall: 24-hour temporal profile (TP108 Table 2, Existing column)\n"
         "• Loss model: SCS Curve Number (impervious CN=98 Ia=0; pervious Ia=5 mm)\n"
         "• Hydrograph: Triangular unit hydrograph convolution\n\n"
-        "Design-storm approach:\n"
-        "  Enter the FINAL 24-hour depth in mm.\n"
-        "  Apply AEP and climate-change adjustments BEFORE entry.\n\n"
+        "Rainfall:\n"
+        "  Enter the EXISTING 24-hour depth in mm, then select AEP Event and\n"
+        "  Climate Change Scenario. TP108 Table 1 scales the depth; TP108 Table 2\n"
+        "  distributes it across the 24-hour temporal profile.\n\n"
         "Required fields (defaults match tool chain output):\n"
         "  TArea[ha]  — subcatchment area in hectares\n"
         "  ToC_min    — time of concentration in minutes\n"
@@ -83,15 +168,18 @@ _HELP = {
         "and 3-panel matplotlib plots (hyetograph, hydrograph, cumulative volume)."
     ),
     'design': (
-        "Design Storm Rainfall Depth (mm)\n"
-        "  The FINAL 24-hour design depth in mm, including any AEP and climate-change "
-        "adjustments. Do not enter the raw base depth — pre-adjust externally.\n\n"
+        "Existing 24-hour Rainfall Depth (mm)\n"
+        "  The present-day (existing) 24-hour design depth in mm, BEFORE climate-change "
+        "adjustment. The tool applies the TP108 Table 1 increment for the selected "
+        "AEP Event and Climate Change Scenario automatically.\n\n"
+        "AEP Event / Climate Change Scenario\n"
+        "  Select the Annual Exceedance Probability and warming scenario. "
+        "'Existing' applies no increment.\n\n"
         "Storm Event Label\n"
-        "  Free-text label used in plot titles and output filenames, "
-        "e.g. '1% AEP CC3.8 Design Storm'. Leave blank to use 'Storm'.\n\n"
-        "Event Date (YYYY-MM-DD)\n"
-        "  Date of the design storm event. Used in output filenames.\n"
-        "  Leave blank to use 'NoDate'.\n\n"
+        "  Free-text label used in plot titles and output filenames. Optional.\n\n"
+        "Event Date\n"
+        "  Date of the design storm event, chosen from the calendar picker. "
+        "Used in output filenames.\n\n"
         "ID Field (optional)\n"
         "  Used to label CSV files and plot titles. If blank, feature IDs are used.\n\n"
         "Output Mode\n"
@@ -99,7 +187,9 @@ _HELP = {
         "  'Edit input layer in-place'  — writes fields directly into the source.\n"
         "  'CSV & Plots only'           — no vector layer; CSVs and plots only.\n\n"
         "Export Rainfall CSV\n"
-        "  Saves the 10-minute rainfall time series to Rainfall_{date}_{label}.csv.\n"
+        "  Saves the 10-minute rainfall time series to Rainfall_{tag}.csv, plus a\n"
+        "  simplified 2-column RainfallForTUFLOWInput_{tag}.csv (Time_hr, Rainfall_mm)\n"
+        "  for use as a TUFLOW rainfall boundary input.\n"
         "  Always enabled when Output Mode is 'CSV & Plots only'.\n\n"
         "Output Folder\n"
         "  Destination for CSV and PNG plot files."
@@ -315,33 +405,74 @@ class FlowCalculationWidget(QWidget):
         sec2, g2 = _section('  Design Storm Event', _SLATE, '#ECEFF1', _HELP['design'])
         row = 0
 
-        g2.addWidget(_row_label('Design Storm Depth (mm)'), row, 0)
+        g2.addWidget(_row_label('Existing 24-hr Rainfall Depth (mm)'), row, 0)
         self.spin_depth = QDoubleSpinBox()
         self.spin_depth.setRange(1.0, 9999.0)
         self.spin_depth.setValue(50.0)
         self.spin_depth.setDecimals(1)
         self.spin_depth.setSuffix('  mm')
         self.spin_depth.setToolTip(
-            'Final 24-hour design rainfall depth in mm.\n'
-            'Apply AEP and climate-change adjustments before entry.'
+            'Present-day (existing) 24-hour design rainfall depth in mm.\n'
+            'Climate-change adjustment is applied automatically from AEP + CC Scenario.'
         )
         g2.addWidget(self.spin_depth, row, 1); row += 1
 
+        g2.addWidget(_row_label('AEP Event'), row, 0)
+        self.combo_aep = QComboBox()
+        self.combo_aep.addItems(['50%', '20%', '10%', '5%', '2%', '1%'])
+        self.combo_aep.setCurrentIndex(5)   # 1%
+        g2.addWidget(self.combo_aep, row, 1); row += 1
+
+        g2.addWidget(_row_label('Climate Change Scenario'), row, 0)
+        self.combo_cc = QComboBox()
+        self.combo_cc.addItems(['Existing', '2.1°C', '3.8°C'])
+        self.combo_cc.setCurrentIndex(0)   # Existing
+        g2.addWidget(self.combo_cc, row, 1); row += 1
+
         g2.addWidget(_row_label('Storm Event Label'), row, 0)
         self.edit_label = QLineEdit()
-        self.edit_label.setPlaceholderText('e.g.  1% AEP CC3.8  (optional)')
+        self.edit_label.setPlaceholderText('optional')
         self.edit_label.setToolTip(
             'Free-text label used in plot titles and output filenames.'
         )
         g2.addWidget(self.edit_label, row, 1); row += 1
 
-        g2.addWidget(_row_label('Event Date (YYYY-MM-DD)'), row, 0)
-        self.edit_date = QLineEdit()
-        self.edit_date.setPlaceholderText('e.g.  2026-08-17  (optional)')
+        g2.addWidget(_row_label('Event Date'), row, 0)
+        date_row = QWidget()
+        date_row.setStyleSheet('background: transparent;')
+        date_hl = QHBoxLayout(date_row)
+        date_hl.setContentsMargins(0, 0, 0, 0)
+        date_hl.setSpacing(4)
+
+        # Qt's built-in QDateEdit calendar popup is a native Qt::Popup window;
+        # on Windows 11 / Qt6 these get an OS-composited dark backdrop applied
+        # at the window level, which no widget-level palette/stylesheet can
+        # reach. Disable it and use a normal QDialog-hosted calendar instead
+        # (triggered by the button below) — a regular top-level window is not
+        # subject to that popup-only backdrop behaviour.
+        self.edit_date = QDateEdit()
+        self.edit_date.setCalendarPopup(False)
+        self.edit_date.setDisplayFormat('yyyy-MM-dd')
+        self.edit_date.setDate(QDate.currentDate())
         self.edit_date.setToolTip(
-            'Date of the design storm event. Used in output filenames.'
+            'Date of the design storm event. Used in output filenames.\n'
+            'Type directly, use the spin arrows, or click the calendar button.'
         )
-        g2.addWidget(self.edit_date, row, 1); row += 1
+        date_hl.addWidget(self.edit_date, 1)
+
+        self.btn_calendar = QToolButton()
+        self.btn_calendar.setText('📅')
+        self.btn_calendar.setToolTip('Pick date from calendar')
+        self.btn_calendar.setCursor(_PointingHand)
+        self.btn_calendar.setStyleSheet(
+            'QToolButton { background: white; border: 1px solid #B0BEC5;'
+            '  border-radius: 3px; padding: 2px 6px; font-size: 12px; }'
+            'QToolButton:hover { background: #EEF4FF; }'
+        )
+        self.btn_calendar.clicked.connect(self._open_date_picker)
+        date_hl.addWidget(self.btn_calendar)
+
+        g2.addWidget(date_row, row, 1); row += 1
 
         g2.addWidget(_row_label('ID Field (optional)'), row, 0)
         self.field_id = _field_combo(self.combo_layer)
@@ -353,16 +484,18 @@ class FlowCalculationWidget(QWidget):
             'New output layer',
             'Edit input layer in-place',
             'CSV & Plots only (no vector layer)',
+            'Rainfall Only (no catchment layer)',
         ])
         self.combo_output_mode.setCurrentIndex(1)
+        self.combo_output_mode.currentIndexChanged.connect(self._on_output_mode_changed)
         g2.addWidget(self.combo_output_mode, row, 1); row += 1
 
         g2.addWidget(_row_label('Export Rainfall CSV'), row, 0)
         self.chk_rainfall_csv = QCheckBox()
         self.chk_rainfall_csv.setToolTip(
             'Also save the 10-minute rainfall time series to\n'
-            'Rainfall_{date}_{label}.csv.\n'
-            'Always enabled when Output Mode is "CSV & Plots only".'
+            'Rainfall_{tag}.csv, plus RainfallForTUFLOWInput_{tag}.csv.\n'
+            'Always enabled when Output Mode is "CSV & Plots only" or "Rainfall Only".'
         )
         self.chk_rainfall_csv.setStyleSheet('background: transparent;')
         g2.addWidget(self.chk_rainfall_csv, row, 1); row += 1
@@ -433,33 +566,70 @@ class FlowCalculationWidget(QWidget):
 
         root.addWidget(footer)
 
+    def _open_date_picker(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle('Select Event Date')
+        dlg.setStyleSheet('QDialog { background: white; }')
+        v = QVBoxLayout(dlg)
+        v.setContentsMargins(6, 6, 6, 6)
+
+        cal = QCalendarWidget(dlg)
+        cal.setGridVisible(True)
+        cal.setSelectedDate(self.edit_date.date())
+        _whiten_calendar(cal)
+        v.addWidget(cal)
+
+        def _pick(date):
+            self.edit_date.setDate(date)
+            dlg.accept()
+
+        cal.clicked.connect(_pick)
+        cal.activated.connect(_pick)
+        dlg.exec()
+
+    def _on_output_mode_changed(self, idx):
+        rainfall_only = (idx == 3)
+        for w in (self.combo_layer, self.field_area, self.field_toc,
+                  self.field_cn, self.field_imp, self.field_id):
+            w.setEnabled(not rainfall_only)
+        if rainfall_only:
+            self.lbl_status.setText('Rainfall Only — no catchment layer needed.')
+        elif self.lbl_status.text().startswith('Rainfall Only'):
+            self.lbl_status.setText('Ready.')
+
     def _run(self):
+        output_mode   = self.combo_output_mode.currentIndex()
+        rainfall_only = (output_mode == 3)
+
+        field_area = field_toc = field_cn = field_imp = field_id = None
         layer = self.combo_layer.currentLayer()
-        if layer is None or not layer.isValid():
-            self.lbl_status.setText('No subcatchment layer selected.'); return
 
-        field_area = self.field_area.currentField()
-        field_toc  = self.field_toc.currentField()
-        field_cn   = self.field_cn.currentField()
-        field_imp  = self.field_imp.currentField()
+        if not rainfall_only:
+            if layer is None or not layer.isValid():
+                self.lbl_status.setText('No subcatchment layer selected.'); return
 
-        if not field_area:
-            self.lbl_status.setText('Area field not selected.'); return
-        if not field_toc:
-            self.lbl_status.setText('ToC field not selected.'); return
-        if not field_cn:
-            self.lbl_status.setText('Curve Number field not selected.'); return
-        if not field_imp:
-            self.lbl_status.setText('Imperviousness field not selected.'); return
+            field_area = self.field_area.currentField()
+            field_toc  = self.field_toc.currentField()
+            field_cn   = self.field_cn.currentField()
+            field_imp  = self.field_imp.currentField()
+
+            if not field_area:
+                self.lbl_status.setText('Area field not selected.'); return
+            if not field_toc:
+                self.lbl_status.setText('ToC field not selected.'); return
+            if not field_cn:
+                self.lbl_status.setText('Curve Number field not selected.'); return
+            if not field_imp:
+                self.lbl_status.setText('Imperviousness field not selected.'); return
+
+            field_id = self.field_id.currentField() or None
 
         output_folder = self.fw_folder.filePath().strip()
         if not output_folder:
             self.lbl_status.setText('Output folder not specified.'); return
 
-        output_mode      = self.combo_output_mode.currentIndex()
-        field_id         = self.field_id.currentField() or None
         storm_label      = self.edit_label.text().strip()
-        event_date       = self.edit_date.text().strip()
+        event_date       = QDateTime(self.edit_date.date(), QTime(0, 0, 0))
         export_rain_csv  = self.chk_rainfall_csv.isChecked()
 
         self.btn_run.setEnabled(False)
@@ -486,20 +656,23 @@ class FlowCalculationWidget(QWidget):
 
         try:
             params = {
-                'INPUT_LAYER':         layer,
-                'FIELD_AREA':          field_area,
-                'FIELD_TOC':           field_toc,
-                'FIELD_CN':            field_cn,
-                'FIELD_IMP':           field_imp,
                 'RAINFALL_DEPTH':      self.spin_depth.value(),
+                'AEP_EVENT':           self.combo_aep.currentIndex(),
+                'CC_SCENARIO':         self.combo_cc.currentIndex(),
                 'STORM_LABEL':         storm_label,
                 'EVENT_DATE':          event_date,
                 'OUTPUT_MODE':         output_mode,
                 'OUTPUT_RAINFALL_CSV': export_rain_csv,
                 'OUTPUT_FOLDER':       output_folder,
             }
-            if field_id:
-                params['FIELD_ID'] = field_id
+            if not rainfall_only:
+                params['INPUT_LAYER'] = layer
+                params['FIELD_AREA']  = field_area
+                params['FIELD_TOC']   = field_toc
+                params['FIELD_CN']    = field_cn
+                params['FIELD_IMP']   = field_imp
+                if field_id:
+                    params['FIELD_ID'] = field_id
             if output_mode == 0:
                 params['OUTPUT_LAYER'] = 'TEMPORARY_OUTPUT'
 
@@ -508,11 +681,14 @@ class FlowCalculationWidget(QWidget):
             if output_mode == 0:
                 self._load_output(result)
                 self.lbl_status.setText('Done — flow layer loaded into project.')
+            elif rainfall_only:
+                self.lbl_status.setText('Done — rainfall CSV exported.')
             else:
                 self.lbl_status.setText('Done — PeakFlow_m3s / TotalVol_m3 saved.')
             self.progress.setValue(100)
             QMessageBox.information(
                 self, 'Done',
+                'Rainfall CSV export complete.' if rainfall_only else
                 'Flow calculation complete.\nHydrograph CSV files saved to the output folder.'
             )
 
