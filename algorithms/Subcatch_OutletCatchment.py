@@ -344,12 +344,24 @@ class OutletCatchmentGenerator(QgsProcessingAlgorithm):
         full_catchments  = []   # every outlet's own full (nested) catchment — used by the
                                  # split-catchment phase below regardless of output mode
 
+        def _resolve_layer(output):
+            """Resolves a processing.run() OUTPUT value into a real
+            QgsMapLayer, regardless of whether this QGIS version/setup
+            handed back a file path, a 'memory:' URI, or an already-open
+            layer object for a TEMPORARY_OUTPUT — this varies across QGIS
+            versions, and assuming it's always an OGR-readable file path
+            (QgsVectorLayer(output, name, 'ogr')) silently breaks on setups
+            where it's a memory-provider URI instead."""
+            if isinstance(output, str):
+                return QgsProcessingUtils.mapLayerFromString(output, context)
+            return output
+
         def _tag_outlet_id(output, value):
             """Stamps an 'OutletID' string attribute (one value, every
             feature) onto a catchment output, in place, so the polygon can
             be traced back to the outlet point it was delineated from —
             independent of output mode or file naming."""
-            lyr = QgsVectorLayer(output, '_tmp_tag', 'ogr') if isinstance(output, str) else output
+            lyr = _resolve_layer(output)
             dp = lyr.dataProvider()
             if lyr.fields().indexOf('OutletID') < 0:
                 dp.addAttributes([QgsField('OutletID', QVariant.String, '', 100)])
@@ -502,8 +514,7 @@ class OutletCatchmentGenerator(QgsProcessingAlgorithm):
             mfb.setCurrentStep(step); step += 1
             cat_path = os.path.join(out_folder, f'{safe_id}_Catchment.shp')
             cat_fixed_out = cat_fixed['OUTPUT']
-            cat_fixed_lyr = (QgsVectorLayer(cat_fixed_out, '_tmp_cat', 'ogr')
-                              if isinstance(cat_fixed_out, str) else cat_fixed_out)
+            cat_fixed_lyr = _resolve_layer(cat_fixed_out)
             cols_to_drop = [f.name() for f in cat_fixed_lyr.fields() if f.name().lower() in ('dn', 'fid')]
             if cols_to_drop:
                 processing.run(
@@ -588,7 +599,7 @@ class OutletCatchmentGenerator(QgsProcessingAlgorithm):
             feedback.pushInfo("Computing split (non-overlapping) catchments...")
 
             def _combined_geom(output):
-                lyr = QgsVectorLayer(output, '_tmp', 'ogr') if isinstance(output, str) else output
+                lyr = _resolve_layer(output)
                 geom = None
                 for f in lyr.getFeatures():
                     geom = f.geometry() if geom is None else geom.combine(f.geometry())
@@ -650,7 +661,7 @@ class OutletCatchmentGenerator(QgsProcessingAlgorithm):
                     context=context, feedback=_QuietFeedback(feedback), is_child_algorithm=True,
                 )
                 fixed_out = fixed['OUTPUT']
-                fixed_for_area = QgsVectorLayer(fixed_out, '_tmp', 'ogr') if isinstance(fixed_out, str) else fixed_out
+                fixed_for_area = _resolve_layer(fixed_out)
                 split_area = sum(f.geometry().area() for f in fixed_for_area.getFeatures())
                 feedback.pushInfo(
                     f"    {item['safe_id']}: area {own_area:.0f} m² -> {split_area:.0f} m² after split."
@@ -720,13 +731,11 @@ class OutletCatchmentGenerator(QgsProcessingAlgorithm):
         # Strip internal fields added by polygonize (dn) and mergevectorlayers
         # (layer, path).  native:retainfields with FIELDS=[] is rejected by QGIS,
         # so we use deletecolumn on the known field names instead.
-        # fixed['OUTPUT'] may be a file-path string rather than a QgsVectorLayer,
-        # so resolve it to a layer object before inspecting fields.
+        # fixed['OUTPUT'] may be a file-path string, a 'memory:' URI, or a
+        # layer object depending on QGIS/Processing settings, so resolve it
+        # to a layer object before inspecting fields.
         fixed_out = fixed['OUTPUT']
-        if isinstance(fixed_out, str):
-            fixed_lyr = QgsVectorLayer(fixed_out, '_tmp_fixed', 'ogr')
-        else:
-            fixed_lyr = fixed_out
+        fixed_lyr = _resolve_layer(fixed_out)
         internal_fields = {'dn', 'layer', 'path', 'fid'}
         cols_to_drop = [
             f.name() for f in fixed_lyr.fields()
@@ -847,8 +856,7 @@ class OutletCatchmentGenerator(QgsProcessingAlgorithm):
             out_split_dest.destinationName = 'Outlet Catchments (Split)'
 
             fixed_split_out = fixed_split['OUTPUT']
-            fixed_split_lyr = (QgsVectorLayer(fixed_split_out, '_tmp_split', 'ogr')
-                                if isinstance(fixed_split_out, str) else fixed_split_out)
+            fixed_split_lyr = _resolve_layer(fixed_split_out)
             cols_to_drop = [
                 f.name() for f in fixed_split_lyr.fields()
                 if f.name().lower() in ('dn', 'layer', 'path', 'fid')
