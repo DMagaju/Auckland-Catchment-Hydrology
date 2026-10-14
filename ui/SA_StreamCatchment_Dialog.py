@@ -41,7 +41,7 @@ from qgis.core import (
     QgsCoordinateTransform,
     QgsWkbTypes,
 )
-from qgis.gui import QgsMapLayerComboBox, QgsMapTool, QgsVertexMarker
+from qgis.gui import QgsMapLayerComboBox, QgsFieldComboBox, QgsFileWidget, QgsMapTool, QgsVertexMarker
 
 import processing
 
@@ -104,7 +104,7 @@ except AttributeError:
 
 # ── Widget stylesheet ─────────────────────────────────────────────────────────
 _WIDGET_STYLE = """
-    QgsMapLayerComboBox, QComboBox, QDoubleSpinBox, QSpinBox, QLineEdit {
+    QgsMapLayerComboBox, QgsFieldComboBox, QComboBox, QDoubleSpinBox, QSpinBox, QLineEdit {
         background-color: white;
         color: black;
         border: 1px solid #B0BEC5;
@@ -114,7 +114,41 @@ _WIDGET_STYLE = """
     }
     QComboBox::drop-down { border: none; }
     QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 16px; }
+    QgsFileWidget QToolButton, QgsFileWidget QLineEdit {
+        background-color: white;
+        color: black;
+        border: 1px solid #B0BEC5;
+        border-radius: 3px;
+    }
+    QgsMapLayerComboBox:disabled, QgsFieldComboBox:disabled, QComboBox:disabled,
+    QDoubleSpinBox:disabled, QSpinBox:disabled, QLineEdit:disabled,
+    QgsFileWidget QToolButton:disabled, QgsFileWidget QLineEdit:disabled {
+        background-color: #ECEFF1;
+        color: #90A4AE;
+    }
+    QCheckBox::indicator {
+        width: 13px;
+        height: 13px;
+        border: 1px solid #90A4AE;
+        border-radius: 2px;
+        background-color: white;
+    }
+    QCheckBox::indicator:checked {
+        background-color: #E3F2FD;
+        border: 1px solid #1565C0;
+        image: url(__CHECK_ICON__);
+    }
+    QCheckBox::indicator:disabled {
+        background-color: #ECEFF1;
+        border: 1px solid #CFD8DC;
+    }
 """
+# Styling QCheckBox::indicator at all (even just border/background) makes Qt
+# stop drawing its native check glyph for the checked state, so the tick has
+# to be supplied as an image ourselves — a tiny bundled SVG, referenced by
+# absolute path (QSS url() needs forward slashes even on Windows).
+_CHECK_ICON = os.path.join(os.path.dirname(__file__), 'assets', 'checkbox_tick.svg').replace('\\', '/')
+_WIDGET_STYLE = _WIDGET_STYLE.replace('__CHECK_ICON__', _CHECK_ICON)
 
 _SWITCH_ACTIVE = (
     f'QPushButton {{ background: {_BLUE}; color: white; border: none;'
@@ -175,6 +209,17 @@ _HELP = {
         "3. Select the drainage raster and click Run.\n\n"
         "Each outlet produces one catchment polygon. Nested outlets are supported."
     ),
+    'out_separate': (
+        "Save each outlet as separate layers\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Instead of merging every outlet into one combined set of layers, "
+        "writes each outlet's own Catchment / SubCatchment / Stream / Outlet "
+        "shapefiles into the output folder below, named from the Outlet ID "
+        "field set above in Parameters (e.g. 'US1_Catchment.shp', "
+        "'US1_SubCatchment.shp').\n\n"
+        "Requires an existing outlet points layer (not available when outlets "
+        "are drawn), an Outlet ID field (set above), and an output folder."
+    ),
     'out_params': (
         "Drainage Direction Raster\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -199,7 +244,24 @@ _HELP = {
         "The 'Sub-Catchments' polygon layer from the Generate panel. "
         "When provided, a second output layer ('Outlet Sub-Catchments') is "
         "produced containing the individual sub-catchment polygons that fall "
-        "within each outlet's contributing area, each tagged with outlet_id."
+        "within each outlet's contributing area, each keeping its own "
+        "SubcatchID from the Generate panel.\n\n"
+        "Outlet ID Field (optional)\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Pick an attribute field on the Outlet Points layer holding each "
+        "outlet's own ID (e.g. 'US1', 'DS1'). Its value is copied into an "
+        "'OutletID' attribute on every catchment polygon produced (combined "
+        "or separate-layers mode, including split catchments), so you can "
+        "always trace a catchment back to the outlet it came from. Left "
+        "blank, catchments are tagged 'Outlet_1', 'Outlet_2', … instead.\n\n"
+        "Split Catchments Between Outlets\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Unticked (default): outlet catchments stay nested/overlapping — a "
+        "downstream outlet's catchment fully contains any upstream outlet's. "
+        "Ticked: an additional non-overlapping version is also produced, with "
+        "each outlet's catchment reduced to exclude whatever's already "
+        "captured by its own upstream outlet(s). Works the same way whether "
+        "or not 'Save each outlet as separate layers' below is ticked."
     ),
 }
 
@@ -613,6 +675,15 @@ def _row_label(text):
     return lbl
 
 
+def _field_combo(layer_combo):
+    cb = QgsFieldComboBox()
+    cb.setAllowEmptyFieldName(True)
+    layer_combo.layerChanged.connect(cb.setLayer)
+    if layer_combo.currentLayer():
+        cb.setLayer(layer_combo.currentLayer())
+    return cb
+
+
 def _make_footer(run_label, run_cb, parent):
     """Build progress + status + run button footer; returns (widget, progress, status, btn)."""
     footer = QWidget(parent)
@@ -919,9 +990,61 @@ class StreamCatchmentWidget(QWidget):
             'When provided, produces a second output with the individual\n'
             'sub-catchments within each outlet\'s contributing area.'
         )
-        g.addWidget(self._out_subcatchments, row, 1)
+        g.addWidget(self._out_subcatchments, row, 1); row += 1
+
+        g.addWidget(_row_label('Outlet ID field (optional)'), row, 0)
+        self._out_id_field = _field_combo(self._out_outlets)
+        self._out_id_field.setToolTip(
+            'Pick which attribute field in the outlet points layer holds each\n'
+            'outlet\'s own ID (e.g. "US1", "DS1"). Copied into an "OutletID"\n'
+            'attribute on every catchment polygon so you know which outlet it\n'
+            'belongs to — and, if "Save each outlet as separate layers" below\n'
+            'is ticked, also names that outlet\'s own output files.'
+        )
+        self._out_outlets.layerChanged.connect(self._auto_pick_out_id_field)
+        self._auto_pick_out_id_field(self._out_outlets.currentLayer())
+        g.addWidget(self._out_id_field, row, 1); row += 1
+
+        g.addWidget(_row_label('Split catchments between outlets'), row, 0)
+        self._out_split = QCheckBox()
+        self._out_split.setStyleSheet('background: transparent;')
+        self._out_split.setToolTip(
+            'Unticked (default): outlet catchments are nested/overlapping — a\n'
+            'downstream outlet\'s catchment fully contains any upstream outlet\'s.\n\n'
+            'Ticked: also produce a non-overlapping version, with each outlet\'s\n'
+            'catchment reduced to exclude the area already captured by its own\n'
+            'upstream outlet(s). Works the same way whether or not "Save each\n'
+            'outlet as separate layers" is ticked below.'
+        )
+        g.addWidget(self._out_split, row, 1); row += 1
 
         bv.addWidget(sec)
+
+        sec2, g2 = _section('  Separate per-outlet layers', _BLUE, '#EEF4FF', _HELP.get('out_separate', ''))
+        row2 = 0
+
+        g2.addWidget(_row_label('Save each outlet as separate layers'), row2, 0)
+        self._out_separate = QCheckBox()
+        self._out_separate.setStyleSheet('background: transparent;')
+        self._out_separate.setToolTip(
+            'Instead of one combined set of layers, write each outlet\'s own\n'
+            'Catchment/SubCatchment/Stream/Outlet shapefiles into the output\n'
+            'folder below, named from the Outlet ID field (e.g. US1_Catchment.shp).'
+        )
+        self._out_separate.toggled.connect(self._on_out_separate_toggled)
+        g2.addWidget(self._out_separate, row2, 1); row2 += 1
+
+        g2.addWidget(_row_label('Output folder'), row2, 0)
+        self._out_folder = QgsFileWidget()
+        try:
+            self._out_folder.setStorageMode(QgsFileWidget.StorageMode.GetDirectory)
+        except AttributeError:
+            self._out_folder.setStorageMode(QgsFileWidget.GetDirectory)
+        self._out_folder.setFilePath('')
+        self._out_folder.setEnabled(False)
+        g2.addWidget(self._out_folder, row2, 1)
+
+        bv.addWidget(sec2)
         bv.addStretch(1)
         scroll.setWidget(body)
         pv.addWidget(scroll, 1)
@@ -931,6 +1054,33 @@ class StreamCatchmentWidget(QWidget):
         )
         pv.addWidget(footer)
         return panel
+
+    def _on_out_separate_toggled(self, checked):
+        self._out_folder.setEnabled(checked)
+
+    def _auto_pick_out_id_field(self, layer):
+        """Pre-select a sensible field in the Outlet ID field combo whenever
+        the Outlet points layer changes, so the combo visibly shows a real
+        field name (picked from THAT outlet layer's own attributes) instead
+        of sitting blank and looking like a free-text box."""
+        if layer is None:
+            return
+        fields = layer.fields()
+        if fields.count() == 0:
+            return
+        preferred = None
+        for name in ('ID', 'Outlet_ID', 'OutletID', 'Outlet', 'Name'):
+            if fields.indexOf(name) >= 0:
+                preferred = name
+                break
+        if preferred is None:
+            for f in fields:
+                if f.name().lower() not in ('fid', 'id'):
+                    preferred = f.name()
+                    break
+        if preferred is None:
+            preferred = fields.at(0).name()
+        self._out_id_field.setField(preferred)
 
     # ── Draw session ──────────────────────────────────────────────────────────
 
@@ -1033,6 +1183,17 @@ class StreamCatchmentWidget(QWidget):
         subcatchments = self._out_subcatchments.currentLayer()
         snap_tol      = self._out_snap.value()
 
+        separate_outputs = self._out_separate.isChecked()
+        id_field         = self._out_id_field.currentField()
+        out_folder       = self._out_folder.filePath().strip()
+        if separate_outputs:
+            if not id_field:
+                self._out_status.setText('Separate layers ticked but no Outlet ID field chosen.')
+                return
+            if not out_folder:
+                self._out_status.setText('Separate layers ticked but no output folder chosen.')
+                return
+
         self._out_run.setEnabled(False)
         self._out_status.setText('Running r.water.outlet per outlet…')
         self._out_progress.setValue(0)
@@ -1040,34 +1201,57 @@ class StreamCatchmentWidget(QWidget):
 
         fb = _AlgoFeedback(self._out_progress, self._out_status)
 
+        split_outputs = self._out_split.isChecked()
+
         params = {
-            'INPUT_DRAINAGE'             : drainage,
-            'INPUT_OUTLETS'              : outlets,
-            'SNAP_TOLERANCE'             : snap_tol,
-            'OUTPUT_CATCHMENTS'          : 'TEMPORARY_OUTPUT',
-            'OUTPUT_CATCHMENTS_UNMERGED' : 'TEMPORARY_OUTPUT',
-            'OUTPUT_STREAMS'             : 'TEMPORARY_OUTPUT',
+            'INPUT_DRAINAGE'  : drainage,
+            'INPUT_OUTLETS'   : outlets,
+            'SNAP_TOLERANCE'  : snap_tol,
+            'SPLIT_OUTPUTS'   : split_outputs,
+            'SEPARATE_OUTPUTS': separate_outputs,
         }
         if streams is not None and streams.isValid():
             params['INPUT_STREAMS'] = streams
         if subcatchments is not None and subcatchments.isValid():
             params['INPUT_SUBCATCHMENTS'] = subcatchments
+        if id_field:
+            # Tags every catchment polygon with an "OutletID" attribute
+            # regardless of mode; also names output files in separate mode.
+            params['OUTLET_ID_FIELD'] = id_field
+        if separate_outputs:
+            params['OUTPUT_FOLDER'] = out_folder
+        else:
+            params['OUTPUT_CATCHMENTS']          = 'TEMPORARY_OUTPUT'
+            params['OUTPUT_CATCHMENTS_UNMERGED'] = 'TEMPORARY_OUTPUT'
+            params['OUTPUT_STREAMS']             = 'TEMPORARY_OUTPUT'
+            if split_outputs:
+                params['OUTPUT_CATCHMENTS_SPLIT'] = 'TEMPORARY_OUTPUT'
 
         try:
             result = processing.run(self._ALGO_OUTLET, params, feedback=fb)
-            self._load_outlet_outputs(result)
-            try:
-                from ..pipeline_state import save_pipeline_state
-                save_pipeline_state('catchments',         'Outlet Catchments')
-                save_pipeline_state('catchment_id_field', 'SubcatchID')
-            except Exception:
-                pass
-            if subcatchments is not None and subcatchments.isValid():
-                self._out_status.setText('Done — outlet catchments and sub-catchments loaded.')
+            if separate_outputs:
+                msg = f'per-outlet layers written to {out_folder}'
+                if split_outputs:
+                    msg += ' (including split/non-overlapping catchments)'
+                self._out_status.setText(f'Done — {msg}.')
+                self._out_progress.setValue(100)
+                QMessageBox.information(self, 'Done', f'Outlet Catchment delineation complete.\n{msg.capitalize()}:\n{out_folder}')
             else:
-                self._out_status.setText('Done — outlet catchments loaded.')
-            self._out_progress.setValue(100)
-            QMessageBox.information(self, 'Done', 'Outlet Catchment delineation complete.\nCatchment layers have been loaded into the project.')
+                self._load_outlet_outputs(result)
+                try:
+                    from ..pipeline_state import save_pipeline_state
+                    save_pipeline_state('catchments',         'Outlet Catchments')
+                    save_pipeline_state('catchment_id_field', 'SubcatchID')
+                except Exception:
+                    pass
+                msg = 'outlet catchments'
+                if subcatchments is not None and subcatchments.isValid():
+                    msg += ' and sub-catchments'
+                if split_outputs:
+                    msg += ' and split catchments'
+                self._out_status.setText(f'Done — {msg} loaded.')
+                self._out_progress.setValue(100)
+                QMessageBox.information(self, 'Done', 'Outlet Catchment delineation complete.\nCatchment layers have been loaded into the project.')
 
         except Exception:
             err = traceback.format_exc()
@@ -1225,5 +1409,25 @@ class StreamCatchmentWidget(QWidget):
                 })
                 str_lyr.renderer().setSymbol(sym)
                 QgsProject.instance().addMapLayer(str_lyr)
+
+        # Split (non-overlapping) catchments — only present if "Split
+        # catchments between outlets" was ticked. Loaded last, styled
+        # distinctly (purple outline) from the normal nested catchments.
+        val_split = result.get('OUTPUT_CATCHMENTS_SPLIT')
+        if val_split:
+            if isinstance(val_split, QgsMapLayer):
+                split_lyr = val_split
+                split_lyr.setName('Outlet Catchments (Split)')
+            else:
+                split_lyr = QgsVectorLayer(str(val_split), 'Outlet Catchments (Split)', 'ogr')
+            if split_lyr.isValid():
+                sym = QgsFillSymbol.createSimple({
+                    'color'        : '0,0,0,0',
+                    'outline_color': '#6A1B9A',
+                    'outline_width': '0.4',
+                    'outline_style': 'solid',
+                })
+                split_lyr.renderer().setSymbol(sym)
+                QgsProject.instance().addMapLayer(split_lyr)
 
         self.iface.mapCanvas().refresh()

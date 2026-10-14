@@ -6,6 +6,8 @@ Imported by Subcatch_StreamGeneration and Subcatch_SubBasinGenerator.
 
 __author__ = "Dipendra Magaju"
 
+import re
+
 from qgis.core import (
     QgsApplication,
     QgsProcessingFeedback,
@@ -66,6 +68,19 @@ def _validate_metric_dem(dem):
             "before running this tool."
         )
     return crs
+
+
+def _safe_filename(value):
+    """A string safe to use as a file name on Windows/macOS/Linux — strips
+    characters that are illegal (or just awkward) in a path and collapses
+    whitespace to underscores. Falls back to 'Outlet' if the result would
+    otherwise be empty (e.g. a blank/None ID value). Used to turn an
+    outlet's own ID field value into an '<ID>_Catchment.shp'-style file
+    name (see OutletCatchmentGenerator's per-outlet output mode)."""
+    s = str(value).strip() if value is not None else ''
+    s = re.sub(r'[\\/:*?"<>|]', '_', s)
+    s = re.sub(r'\s+', '_', s)
+    return s or 'Outlet'
 
 
 def _dem_pixel_info(dem, threshold_ha):
