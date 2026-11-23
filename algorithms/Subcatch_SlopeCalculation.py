@@ -9,7 +9,7 @@ Tested On: QGIS 3.44.2
 __author__     = "Dipendra Magaju"
 __copyright__  = "2026"
 __license__    = "GPL"
-__version__    = "V01"
+__version__    = "V02"
 __status__     = "Stable"
 _LINKED_PROMPT = "SCH_SubcatchSlopeCalculationPrompt_GM.txt"
 
@@ -73,10 +73,10 @@ class CalculateSlopeForToC(QgsProcessingAlgorithm):
         return super().flags() | QgsProcessingAlgorithm.FlagNoThreading
 
     def name(self):
-        return 'sch_slope_calculation_v01'
+        return 'sch_slope_calculation_v02'
 
     def displayName(self):
-        return self.tr('Subcatchment Slope Calculation V01')
+        return self.tr('Subcatchment Slope Calculation V02')
 
     def group(self):
         return self.tr('SubCatchment Assessment')
@@ -104,7 +104,13 @@ class CalculateSlopeForToC(QgsProcessingAlgorithm):
             " • Subcatchment geometries are validated\n"
             " • Subcatchment layer is checked for overlapping polygons\n\n"
             "Important: All input layers must share the same CRS. "
-            "DEM must fully cover all flow paths."
+            "DEM must fully cover all flow paths.\n\n"
+            "Length used: Catch_L_m — and therefore Sc_TP108 and the Time of "
+            "Concentration tool that reads Catch_L_m downstream — is taken from the flow "
+            "path's D8_LENGTH_M field (the hydrological D8 length) when present, not the "
+            "output line's own drawn length, so a simplified or stream-extended flow path "
+            "geometry doesn't change the slope/ToC result. Older flow path layers without "
+            "D8_LENGTH_M fall back to the geometry length, as before (V01 behaviour)."
         )
 
     def help(self):
@@ -377,16 +383,36 @@ class CalculateSlopeForToC(QgsProcessingAlgorithm):
                 continue
 
             catchment_id = str(parent_catchment[catchment_id_field])
-            total_length = flowpath_geom.length()
+
+            # Prefer the flow path's hydrological length (D8_LENGTH_M, the
+            # summed D8 raster step length) over the output geometry's own
+            # length, which can be shorter when a simplification tolerance
+            # was applied in Longest Flow Path. Falls back to the geometry
+            # length for flow-path layers from before that field existed.
+            geom_length  = flowpath_geom.length()
+            total_length = geom_length
+            try:
+                field_names = [f.name() for f in flowpath_feat.fields()]
+                if 'D8_LENGTH_M' in field_names:
+                    d8_len = float(flowpath_feat['D8_LENGTH_M'])
+                    if d8_len > 0:
+                        total_length = d8_len
+            except (TypeError, ValueError):
+                pass
+            # Scales a distance measured on the hydrological-length basis
+            # (0..total_length) to the equivalent distance along the actual
+            # (possibly shorter) output geometry, so elevations are still
+            # sampled from real points on that geometry.
+            to_geom_dist = (geom_length / total_length) if total_length > 0 else 1.0
 
             profile = []
             if sampling_method == 0:
                 for distance in range(0, int(total_length) + 1, int(interval)):
-                    point = flowpath_geom.interpolate(distance).asPoint()
+                    point = flowpath_geom.interpolate(distance * to_geom_dist).asPoint()
                     elevation, res = dem_provider.sample(point, 1)
                     if res:
                         profile.append({'dist': float(distance), 'elev': float(elevation)})
-                last_point = flowpath_geom.interpolate(total_length).asPoint()
+                last_point = flowpath_geom.interpolate(geom_length).asPoint()
                 last_elev, res = dem_provider.sample(last_point, 1)
                 if res and (not profile or profile[-1]['dist'] < total_length):
                     profile.append({'dist': total_length, 'elev': float(last_elev)})
@@ -398,7 +424,7 @@ class CalculateSlopeForToC(QgsProcessingAlgorithm):
                         cum_dist += prev_pt.distance(vtx)
                     elevation, res = dem_provider.sample(QgsPointXY(vtx), 1)
                     if res:
-                        profile.append({'dist': cum_dist, 'elev': float(elevation)})
+                        profile.append({'dist': cum_dist / to_geom_dist, 'elev': float(elevation)})
                     prev_pt = vtx
 
             # The TP108 equal-area formula expects the profile to run

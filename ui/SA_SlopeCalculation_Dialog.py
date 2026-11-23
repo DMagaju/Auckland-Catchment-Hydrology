@@ -2,7 +2,7 @@
 """Dock tab — Subcatchment Slope Calculation (TP108)."""
 
 __author__  = "Dipendra Magaju"
-__version__ = "V01"
+__version__ = "V02"
 
 import os
 import traceback
@@ -225,7 +225,7 @@ def _field_combo(layer_combo, field_type=None):
 
 class SlopeCalculationWidget(QWidget):
 
-    _ALGO_ID = 'subcatchmentassessment:sch_slope_calculation_v01'
+    _ALGO_ID = 'subcatchmentassessment:sch_slope_calculation_v02'
 
     def __init__(self, iface, parent=None):
         super().__init__(parent)
