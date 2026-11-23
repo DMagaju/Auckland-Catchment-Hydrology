@@ -9,7 +9,7 @@ simplified polyline.  No stream vector layer is required.
 """
 
 __author__  = "Dipendra Magaju"
-__version__ = "V01"
+__version__ = "V02"
 __status__  = "Stable"
 
 import math
@@ -26,6 +26,7 @@ from qgis.core import (
     QgsProcessingParameterFeatureSink,
     QgsProcessingParameterRasterLayer,
     QgsProcessingParameterNumber,
+    QgsProcessingParameterBoolean,
     QgsFeature,
     QgsFeatureRequest,
     QgsGeometry,
@@ -71,6 +72,7 @@ class LongestFlowPathAlgorithm(QgsProcessingAlgorithm):
     INPUT_DEM           = 'INPUT_DEM'
     SIMPLIFY_TOLERANCE  = 'SIMPLIFY_TOLERANCE'
     MIN_AREA_HA         = 'MIN_AREA_HA'
+    EXTEND_ALONG_STREAM = 'EXTEND_ALONG_STREAM'
     OUTPUT              = 'OUTPUT'
 
     def tr(self, s):
@@ -83,10 +85,10 @@ class LongestFlowPathAlgorithm(QgsProcessingAlgorithm):
         return super().flags() | QgsProcessingAlgorithm.FlagNoThreading
 
     def name(self):
-        return 'sch_longest_flow_path_v01'
+        return 'sch_longest_flow_path_v02'
 
     def displayName(self):
-        return self.tr('Subcatchment Longest Flow Path V01')
+        return self.tr('Subcatchment Longest Flow Path V02')
 
     def group(self):
         return self.tr('SubCatchment Assessment')
@@ -109,13 +111,31 @@ class LongestFlowPathAlgorithm(QgsProcessingAlgorithm):
             "  • Drainage direction raster (OUTPUT_DRAINAGE from Stream and Catchment Generator)\n"
             "  • Flow accumulation raster (OUTPUT_ACCUMULATION from Stream and Catchment Generator)\n"
             "  • Simplification tolerance (m) — smooths D8 staircase; 0 = auto (2× cell size)\n"
-            "  • Minimum sub-catchment area — skip small/sliver polygons\n\n"
+            "  • Minimum sub-catchment area — skip small/sliver polygons\n"
+            "  • Extend along stream network (experimental, off by default) — only applies "
+            "when a stream network is supplied; extends the D8 endpoint along the stream "
+            "line to the true catchment-boundary outlet\n\n"
             "Output:\n"
             "  • One polyline per sub-catchment\n"
-            "    Fields: FLOWPATH_ID, SUBCAT_FID, PATH_LENGTH_M\n\n"
+            "    Fields: FLOWPATH_ID, SUBCAT_FID, D8_LENGTH_M, PATH_LENGTH_M, BRIDGE_CELLS\n"
+            "    — D8_LENGTH_M is the summed raster step length (the hydrological length — "
+            "this is what feeds the Slope Calculation and Time of Concentration tools);\n"
+            "    PATH_LENGTH_M is the length of the output line itself, which can be shorter "
+            "than D8_LENGTH_M if a simplification tolerance was applied, or different again if "
+            "the stream-extension option changed the endpoint;\n"
+            "    BRIDGE_CELLS counts cells where the path briefly left the sub-catchment "
+            "polygon and re-entered it (0 = the path stayed fully inside).\n\n"
             "Notes:\n"
             "  • DEM CRS must be projected and use metres (e.g. EPSG:2193 NZTM)\n"
-            "  • Processing time scales with sub-catchment area × DEM resolution"
+            "  • Processing time scales with sub-catchment area × DEM resolution\n"
+            "  • D8 tracing overestimates true flow length by up to ~8% (the raster "
+            "\"staircase\" effect, worst where the true flow bearing is 22.5° off a grid "
+            "axis). Since time of concentration scales roughly as length^0.66 (TP108), that's "
+            "roughly a +5% bias on computed time of concentration. This is an inherent property "
+            "of D8 raster tracing, not corrected here.\n"
+            "  • V01 of this tool (before this version) had its D8 direction table rotated 45° "
+            "— every traced path read the wrong neighbour cell. Any PATH_LENGTH_M, slope, or "
+            "time-of-concentration result produced by V01 is invalid and should be re-run."
         )
 
     def initAlgorithm(self, config=None):
@@ -170,6 +190,14 @@ class LongestFlowPathAlgorithm(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.EXTEND_ALONG_STREAM,
+                self.tr('Extend along stream network (experimental) — only applies '
+                        'when a stream network is supplied above'),
+                defaultValue=False,
+            )
+        )
+        self.addParameter(
             QgsProcessingParameterFeatureSink(
                 self.OUTPUT,
                 self.tr('Longest Flow Path'),
@@ -186,6 +214,7 @@ class LongestFlowPathAlgorithm(QgsProcessingAlgorithm):
         dem_layer      = self.parameterAsRasterLayer(parameters, self.INPUT_DEM, context)
         simplify_tol   = self.parameterAsDouble(parameters, self.SIMPLIFY_TOLERANCE, context)
         min_area_ha    = self.parameterAsDouble(parameters, self.MIN_AREA_HA, context)
+        extend_along_stream = self.parameterAsBoolean(parameters, self.EXTEND_ALONG_STREAM, context)
 
         if subcat_layer is None:
             raise QgsProcessingException("Sub-catchment layer not found.")
@@ -241,7 +270,9 @@ class LongestFlowPathAlgorithm(QgsProcessingAlgorithm):
         out_fields = QgsFields()
         out_fields.append(QgsField('FLOWPATH_ID',   QVariant.String, len=20))
         out_fields.append(QgsField('SUBCAT_FID',    QVariant.Int))
+        out_fields.append(QgsField('D8_LENGTH_M',   QVariant.Double))
         out_fields.append(QgsField('PATH_LENGTH_M', QVariant.Double))
+        out_fields.append(QgsField('BRIDGE_CELLS',  QVariant.Int))
 
         sink, dest_id = self.parameterAsSink(
             parameters, self.OUTPUT, context,
@@ -282,7 +313,7 @@ class LongestFlowPathAlgorithm(QgsProcessingAlgorithm):
                     continue
 
             try:
-                path_geom, path_len = self._trace(
+                path_geom, d8_length, bridge_cells = self._trace(
                     geom, drain_ds, accum_ds,
                     gt, n_rows, n_cols, cell_w, cell_h, simplify_tol,
                     drain_nodata, accum_nodata,
@@ -297,18 +328,29 @@ class LongestFlowPathAlgorithm(QgsProcessingAlgorithm):
                 feedback.setProgress(int((i + 1) * pct))
                 continue
 
-            # Optional: extend LFP endpoint along stream to catchment boundary
-            if stream_index is not None:
-                path_geom, path_len = self._extend_along_stream(
+            # Optional: extend LFP endpoint along stream to catchment boundary.
+            # D8_LENGTH_M always stays the pure D8 step-sum computed above —
+            # only the output geometry (and therefore PATH_LENGTH_M) changes.
+            if stream_index is not None and extend_along_stream:
+                path_geom, _ = self._extend_along_stream(
                     path_geom, geom, stream_feats, stream_index, cell_sz,
                     accum_ds=accum_ds, gt=gt, accum_nodata=accum_nodata,
+                )
+            geom_length = path_geom.length()
+
+            if bridge_cells > 0:
+                feedback.pushWarning(
+                    f"  FID {fid}: longest flow path used {bridge_cells} boundary-bridging "
+                    f"cell(s) outside the sub-catchment polygon."
                 )
 
             out_f = QgsFeature(out_fields)
             out_f.setGeometry(path_geom)
             out_f.setAttribute('FLOWPATH_ID',   f"FP-{fp_num:05d}")
             out_f.setAttribute('SUBCAT_FID',    fid)
-            out_f.setAttribute('PATH_LENGTH_M', round(path_len, 3))
+            out_f.setAttribute('D8_LENGTH_M',   round(d8_length, 3))
+            out_f.setAttribute('PATH_LENGTH_M', round(geom_length, 3))
+            out_f.setAttribute('BRIDGE_CELLS',  bridge_cells)
             sink.addFeature(out_f, QgsFeatureSink.FastInsert)
             fp_num += 1
             feedback.setProgress(int((i + 1) * pct))
@@ -324,9 +366,9 @@ class LongestFlowPathAlgorithm(QgsProcessingAlgorithm):
                gt, n_rows, n_cols, cell_w, cell_h, simplify_tol,
                drain_nodata=None, accum_nodata=None):
         """
-        Return (QgsGeometry polyline, path_length_m) for the longest D8 flow
-        path within poly_geom, or (None, 0) if the polygon contains no valid
-        drainage cells.
+        Return (QgsGeometry polyline, d8_length_m, bridge_cells) for the
+        longest D8 flow path within poly_geom, or (None, 0, 0) if the polygon
+        contains no valid drainage cells.
 
         Uses DP on the D8 upstream tree:
           1. BFS from the outlet backwards through the upstream graph computes
@@ -345,19 +387,26 @@ class LongestFlowPathAlgorithm(QgsProcessingAlgorithm):
         win_w = col1 - col0 + 1
         win_h = row1 - row0 + 1
         if win_w < 1 or win_h < 1:
-            return None, 0.0
+            return None, 0.0, 0
 
         drain_arr = drain_ds.GetRasterBand(1).ReadAsArray(col0, row0, win_w, win_h)
         if drain_arr is None:
-            return None, 0.0
+            return None, 0.0, 0
 
-        mask = self._rasterize_poly(poly_geom, gt, col0, row0, win_w, win_h)
+        # Two masks: ALL_TOUCHED for connectivity/bridging (a flow path must
+        # be allowed to use every cell the polygon touches, or it fragments
+        # at thin/boundary cells), but a stricter cell-centre mask (no
+        # ALL_TOUCHED) for choosing headwater candidates — otherwise a
+        # headwater can sit up to one cell outside the sub-catchment, inside
+        # its neighbour, just because ALL_TOUCHED let that cell's edge in.
+        mask = self._rasterize_poly(poly_geom, gt, col0, row0, win_w, win_h, all_touched=True)
         if not mask.any():
-            return None, 0.0
+            return None, 0.0, 0
+        mask_centre = self._rasterize_poly(poly_geom, gt, col0, row0, win_w, win_h, all_touched=False)
 
         accum_arr = accum_ds.GetRasterBand(1).ReadAsArray(col0, row0, win_w, win_h)
         if accum_arr is None:
-            return None, 0.0
+            return None, 0.0, 0
 
         def _step(dr, dc):
             return (math.sqrt(cell_w**2 + cell_h**2)
@@ -388,7 +437,7 @@ class LongestFlowPathAlgorithm(QgsProcessingAlgorithm):
                 outlets.append((r, c))
             elif not (0 <= down_r < win_h and 0 <= down_c < win_w
                       and bool(mask[down_r, down_c])):
-                tr, tc, extra = self._bridge_to_mask(
+                tr, tc, extra, _hops = self._bridge_to_mask(
                     down_r, down_c, drain_arr, mask, win_h, win_w,
                     cell_w, cell_h, drain_nodata,
                 )
@@ -400,7 +449,7 @@ class LongestFlowPathAlgorithm(QgsProcessingAlgorithm):
                 upstream.setdefault((down_r, down_c), []).append(((r, c), step))
 
         if not outlets:
-            return None, 0.0
+            return None, 0.0, 0
 
         # ── Identify the true outlet ──────────────────────────────────────────
         def _accum_val(rc):
@@ -433,21 +482,29 @@ class LongestFlowPathAlgorithm(QgsProcessingAlgorithm):
 
         # ── Find the true headwater (farthest cell from outlet) ───────────────
         # Headwaters are polygon cells that no other polygon cell drains into.
+        # Prefer candidates inside the cell-centre mask (Issue 3) so the
+        # headwater can't be a cell that's only "inside" the sub-catchment
+        # because ALL_TOUCHED let its edge in; fall back to the unfiltered
+        # set only if that leaves nothing (e.g. a sliver polygon).
         has_upstream = set(upstream.keys())
         headwaters   = [c for c in dist_to_outlet if c not in has_upstream]
         if not headwaters:
             headwaters = list(dist_to_outlet.keys())
+        centre_headwaters = [c for c in headwaters if mask_centre[c[0], c[1]]]
+        if centre_headwaters:
+            headwaters = centre_headwaters
 
         best_hw  = max(headwaters, key=lambda c: dist_to_outlet.get(c, 0.0))
-        path_len = dist_to_outlet.get(best_hw, 0.0)
+        d8_length = dist_to_outlet.get(best_hw, 0.0)
 
-        if path_len <= 0.0 or best_hw == outlet:
-            return None, 0.0
+        if d8_length <= 0.0 or best_hw == outlet:
+            return None, 0.0, 0
 
         # ── Trace forward from headwater to outlet ────────────────────────────
-        chain       = [best_hw]
-        current     = best_hw
-        visited_fwd = {best_hw}
+        chain        = [best_hw]
+        current      = best_hw
+        visited_fwd  = {best_hw}
+        bridge_cells = 0
 
         for _ in range(win_h * win_w + 100):
             if current == outlet:
@@ -463,13 +520,14 @@ class LongestFlowPathAlgorithm(QgsProcessingAlgorithm):
             if 0 <= nr < win_h and 0 <= nc < win_w and bool(mask[nr, nc]):
                 next_cell = (nr, nc)
             else:
-                tr, tc, _ = self._bridge_to_mask(
+                tr, tc, _extra, hops = self._bridge_to_mask(
                     nr, nc, drain_arr, mask, win_h, win_w,
                     cell_w, cell_h, drain_nodata,
                 )
                 if tr is None:
                     break
                 next_cell = (tr, tc)
+                bridge_cells += hops
 
             if next_cell in visited_fwd:
                 break
@@ -478,7 +536,7 @@ class LongestFlowPathAlgorithm(QgsProcessingAlgorithm):
             current = next_cell
 
         if len(chain) < 2:
-            return None, 0.0
+            return None, 0.0, 0
 
         # ── Convert cell indices to map coordinates (cell centres) ────────────
         pts = [QgsPointXY(gt[0] + (col0 + c + 0.5) * gt[1],
@@ -489,7 +547,7 @@ class LongestFlowPathAlgorithm(QgsProcessingAlgorithm):
         if simplify_tol > 0 and not line.isEmpty():
             line = line.simplify(simplify_tol)
 
-        return line, path_len
+        return line, d8_length, bridge_cells
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -647,31 +705,40 @@ class LongestFlowPathAlgorithm(QgsProcessingAlgorithm):
         From (r, c) outside the polygon mask, follow D8 up to max_hops steps
         looking for a cell that re-enters the mask.  Handles irregular polygon
         boundaries where a flow path temporarily exits before returning.
-        Returns (target_r, target_c, bridge_distance) or (None, None, 0).
+        Returns (target_r, target_c, bridge_distance, n_hops) or
+        (None, None, 0.0, 0).
         """
         dist = 0.0
-        for _ in range(max_hops):
+        for hop in range(1, max_hops + 1):
             if not (0 <= r < win_h and 0 <= c < win_w):
-                return None, None, 0.0
+                return None, None, 0.0, 0
             d = int(drain_arr[r, c])
             if drain_nodata is not None and d == int(drain_nodata):
-                return None, None, 0.0
+                return None, None, 0.0, 0
             absd = abs(d)
             if absd not in _D8:
-                return None, None, 0.0
+                return None, None, 0.0, 0
             dr_step, dc_step = _D8[absd]
             diag = (dr_step != 0) and (dc_step != 0)
             dist += (math.sqrt(cell_w**2 + cell_h**2) if diag
                      else (cell_h if dc_step == 0 else cell_w))
             r, c = r + dr_step, c + dc_step
             if not (0 <= r < win_h and 0 <= c < win_w):
-                return None, None, 0.0
+                return None, None, 0.0, 0
             if mask[r, c]:
-                return r, c, dist
-        return None, None, 0.0
+                return r, c, dist, hop
+        return None, None, 0.0, 0
 
-    def _rasterize_poly(self, poly_geom, gt, col0, row0, win_w, win_h):
-        """Rasterize a QgsGeometry polygon to a (win_h × win_w) boolean numpy array."""
+    def _rasterize_poly(self, poly_geom, gt, col0, row0, win_w, win_h, all_touched=True):
+        """Rasterize a QgsGeometry polygon to a (win_h × win_w) boolean numpy array.
+
+        all_touched=True burns every cell the polygon touches (used for
+        connectivity/bridging); all_touched=False burns only cells whose
+        centre falls inside the polygon (used for headwater selection — see
+        Issue 3: ALL_TOUCHED can let a cell up to one pixel outside the
+        polygon count as "inside", allowing a headwater to sit in a
+        neighbouring sub-catchment).
+        """
         mem_drv = gdal.GetDriverByName('MEM')
         mask_ds = mem_drv.Create('', win_w, win_h, 1, gdal.GDT_Byte)
         mask_ds.SetGeoTransform((
@@ -688,8 +755,9 @@ class LongestFlowPathAlgorithm(QgsProcessingAlgorithm):
         feat.SetGeometry(ogr.CreateGeometryFromWkt(poly_geom.asWkt()))
         ogr_lyr.CreateFeature(feat)
 
+        options = ['ALL_TOUCHED=TRUE'] if all_touched else []
         gdal.RasterizeLayer(mask_ds, [1], ogr_lyr, burn_values=[1],
-                            options=['ALL_TOUCHED=TRUE'])
+                            options=options)
         arr     = mask_ds.GetRasterBand(1).ReadAsArray().astype(bool)
         mask_ds = None
         ogr_ds  = None

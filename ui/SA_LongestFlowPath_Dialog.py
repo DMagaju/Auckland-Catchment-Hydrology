@@ -7,7 +7,7 @@ Author: Dipendra Magaju
 """
 
 __author__  = "Dipendra Magaju"
-__version__ = "V01"
+__version__ = "V02"
 
 import os
 import traceback
@@ -18,7 +18,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QToolButton, QProgressBar,
     QDoubleSpinBox, QMessageBox, QFrame, QScrollArea, QDialog, QApplication,
-    QSizePolicy,
+    QSizePolicy, QCheckBox,
 )
 from qgis.core import (
     QgsMapLayerProxyModel,
@@ -129,7 +129,12 @@ _HELP = {
         "━━━━━━━━━━━━━━\n"
         "Digital Elevation Model. Used only when a stream network is also supplied, "
         "to break ties between candidate outlet cells of equal accumulation — the "
-        "lowest cell is chosen as the true outlet."
+        "lowest cell is chosen as the true outlet.\n\n"
+        "Extend Along Stream Network (experimental)\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Only applies when a stream network is supplied. When ticked, extends the "
+        "D8 endpoint along the stream line to the true catchment-boundary outlet "
+        "instead of stopping where the D8 trace itself ends. Off by default."
     ),
     'advanced': (
         "Simplification Tolerance\n"
@@ -274,7 +279,7 @@ def _row_label(text):
 
 class LongestFlowPathWidget(QWidget):
 
-    _ALGO_ID = 'subcatchmentassessment:sch_longest_flow_path_v01'
+    _ALGO_ID = 'subcatchmentassessment:sch_longest_flow_path_v02'
 
     def __init__(self, iface, parent=None):
         super().__init__(parent)
@@ -379,7 +384,16 @@ class LongestFlowPathWidget(QWidget):
             'Used together with the stream network to tiebreak outlet cell selection\n'
             'by choosing the lowest-elevation candidate.'
         )
-        g1.addWidget(self.combo_dem, row, 1)
+        g1.addWidget(self.combo_dem, row, 1); row += 1
+
+        self.cb_extend_stream = QCheckBox('Extend along stream network (experimental)')
+        self.cb_extend_stream.setToolTip(
+            'Only applies when a stream network is supplied above.\n'
+            'Extends the D8 endpoint along the stream line to the true\n'
+            'catchment-boundary outlet. Off by default — newly added and\n'
+            'not yet verified on enough real catchments to trust by default.'
+        )
+        g1.addWidget(self.cb_extend_stream, row, 0, 1, 2)
 
         bv.addWidget(sec1)
 
@@ -522,6 +536,7 @@ class LongestFlowPathWidget(QWidget):
                 'INPUT_ACCUMULATION':  accum,
                 'SIMPLIFY_TOLERANCE':  self.sb_simplify.value(),
                 'MIN_AREA_HA':         self.sb_min_area.value(),
+                'EXTEND_ALONG_STREAM': self.cb_extend_stream.isChecked(),
                 'OUTPUT':              'TEMPORARY_OUTPUT',
             }
 
