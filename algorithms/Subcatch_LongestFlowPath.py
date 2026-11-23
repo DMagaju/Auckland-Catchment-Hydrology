@@ -42,17 +42,23 @@ from qgis.core import (
 
 
 # GRASS r.watershed D8 direction codes → (row_offset, col_offset).
+# code × 45° = direction counter-clockwise from East (confirmed against the
+# r.watershed manual bundled with this QGIS install: "Drainage is 8 directions
+# numbered counter-clockwise starting from 1 in north-east direction", and
+# verified empirically on single-direction synthetic planes in GRASS 8.3/8.4).
+# V01 had this table rotated by one position (it started 1=E instead of
+# 1=NE) — every flow step was read 45° off; see CHANGELOG.
 # Row 0 is north; row increases southward.  Col 0 is west; col increases eastward.
 # Negative codes (-1 … -8) encode boundary/outlet cells; we take abs() before lookup.
 _D8 = {
-    1: ( 0, +1),   # E
-    2: (-1, +1),   # NE
-    3: (-1,  0),   # N
-    4: (-1, -1),   # NW
-    5: ( 0, -1),   # W
-    6: (+1, -1),   # SW
-    7: (+1,  0),   # S
-    8: (+1, +1),   # SE
+    1: (-1, +1),   # NE
+    2: (-1,  0),   # N
+    3: (-1, -1),   # NW
+    4: ( 0, -1),   # W
+    5: (+1, -1),   # SW
+    6: (+1,  0),   # S
+    7: (+1, +1),   # SE
+    8: ( 0, +1),   # E
 }
 
 
@@ -581,13 +587,16 @@ class LongestFlowPathAlgorithm(QgsProcessingAlgorithm):
         if not ext:
             return path_geom, path_geom.length()
 
-        # Sanity check: extension must move us TOWARD the outlet, not away.
-        # If the D8 trace has already gone past the snap vertex (further downstream),
-        # ext[0] will be upstream of pts[-1] and this check prevents backtracking.
+        # Sanity check: every appended vertex must move strictly closer to the
+        # outlet than the one before it. Checking only ext[0] (as a single
+        # before/after comparison) misses a stream line that takes a detour
+        # partway along — it can pass a first-step check yet still add a long
+        # backtrack before finally reaching the outlet. Checking the whole
+        # sequence rejects that case and falls back to the plain D8 path.
         outlet_pt_geom = QgsGeometry.fromPointXY(outlet_line_pts[outlet_idx])
-        d_before = endpoint_geom.distance(outlet_pt_geom)
-        d_after  = QgsGeometry.fromPointXY(ext[0]).distance(outlet_pt_geom)
-        if d_after >= d_before:
+        check_seq = [endpoint] + ext
+        dists = [QgsGeometry.fromPointXY(p).distance(outlet_pt_geom) for p in check_seq]
+        if any(dists[i + 1] > dists[i] + 1e-9 for i in range(len(dists) - 1)):
             return path_geom, path_geom.length()
 
         # Include the snap vertex as the explicit bridge between D8 endpoint
