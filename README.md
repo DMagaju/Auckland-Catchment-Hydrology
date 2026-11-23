@@ -2,6 +2,15 @@
 
 A QGIS plugin providing a complete hydrology workflow for subcatchment delineation, flow path analysis, and TP108/SWCoP V4 flow calculation. Designed for Auckland-region stormwater assessments.
 
+## ⚠️ Known issue in V01
+
+**Longest Flow Path V01's D8 direction table was rotated by one position** (it
+started 1=E instead of the correct 1=NE), so every traced flow path read the
+wrong neighbour cell, 45° off. This was fixed in V02 (plugin version 1.1).
+Any `PATH_LENGTH_M`, slope, or time-of-concentration result produced using a
+V01 flow path layer is invalid and should be re-run with V02 from the
+original sub-catchments, drainage, and accumulation rasters.
+
 ## Features
 
 ### Data Preparation
@@ -10,7 +19,7 @@ A QGIS plugin providing a complete hydrology workflow for subcatchment delineati
 
 ### Catchment Delineation
 - **Stream and Catchment** — derives flow direction and accumulation, generates stream networks, and delineates subcatchments using GRASS r.watershed; supports both grid-based and outlet-based delineation
-- **Longest Flow Path** — computes the hydraulically longest flow path per subcatchment using D8 routing
+- **Longest Flow Path** — computes the hydraulically longest flow path per subcatchment using D8 routing; outputs both `D8_LENGTH_M` (hydrological length) and `PATH_LENGTH_M` (output line length), and a `BRIDGE_CELLS` count; optional experimental stream-network extension (off by default)
 - **Subcatchment Naming** — assigns user-defined prefix-based IDs (e.g. `SC_01`, `SC_02`) to subcatchments
 
 ### Hydrology Calculations

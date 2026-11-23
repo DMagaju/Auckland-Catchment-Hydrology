@@ -2,7 +2,7 @@
 name=Auckland Catchment & Hydrology
 qgisMinimumVersion=3.16
 description=Hydrology tools for subcatchment delineation, flow path analysis, and TP108 flow calculation
-version=1.0
+version=1.1
 author=Dipendra Magaju
 email=dipen.magaju@gmail.com
 about=Provides a full hydrology workflow for Auckland-region catchments: LINZ LiDAR download, DEM conditioning, stream and catchment delineation, longest flow path, slope, impervious area, time of concentration, and TP108 flow calculation.
@@ -13,7 +13,8 @@ homepage=https://github.com/DMagaju/Catchment-Assessment
 category=Analysis
 icon=icon.svg
 license=GNU General Public License v2 or later (GPLv2+)
-changelog=1.0 - Renamed Auckland Catchment & Hydrology; Merge/Split, Longest Flow Path, Outlet Catchment, Slope, ToC, Flow Calculation; pipeline auto-fill
+changelog=1.1 - Longest Flow Path V02: fixed D8 direction mapping (paths from V01 are invalid - re-run slope, ToC and flow calcs); split D8_LENGTH_M (hydrological length) from PATH_LENGTH_M (output line length); cell-centre mask for headwater selection; BRIDGE_CELLS field; fixed a stream-extension detour bug and made that feature an opt-in checkbox; Slope Calculation V02 reads D8_LENGTH_M consistently.
+    1.0 - Renamed Auckland Catchment & Hydrology; Merge/Split, Longest Flow Path, Outlet Catchment, Slope, ToC, Flow Calculation; pipeline auto-fill
     0.1 - Initial release: LiDAR download, DEM conditioning, stream and catchment delineation, impervious area, subcatchment naming
 experimental=False
 deprecated=False
