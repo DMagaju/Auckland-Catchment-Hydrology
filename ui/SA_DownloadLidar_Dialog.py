@@ -12,14 +12,14 @@ or shared when the plugin is packaged or copied.
 import json
 import os
 
-from qgis.PyQt.QtCore import Qt, QTimer
+from qgis.PyQt.QtCore import Qt, QTimer, QEvent, QObject
 from qgis.PyQt.QtGui import QColor, QIcon
 from qgis.PyQt.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QToolButton, QLineEdit,
     QProgressBar, QMessageBox, QScrollArea, QFrame,
     QDoubleSpinBox, QFileDialog, QApplication,
-    QComboBox, QInputDialog,
+    QComboBox, QInputDialog, QDialog,
 )
 from qgis.gui import QgsExtentGroupBox, QgsProjectionSelectionWidget, QgsRubberBand
 from qgis.core import (
@@ -127,6 +127,49 @@ try:
 except AttributeError:
     _PASSWORD = QLineEdit.Password                   # type: ignore
     _NORMAL   = QLineEdit.Normal                     # type: ignore
+
+try:
+    _MOUSE_PRESS = QEvent.Type.MouseButtonPress
+except AttributeError:
+    _MOUSE_PRESS = QEvent.MouseButtonPress           # type: ignore
+
+
+class _PopupStyleWatcher(QObject):
+    """
+    Installed on a widget (and all its current children) that opens a native
+    Qt dialog when clicked — e.g. QgsProjectionSelectionWidget's CRS picker.
+
+    QGIS's own theme renders some native dialogs (like the CRS selector)
+    almost entirely black, with illegible text, unless explicitly styled.
+    There's no signal for "about to open the dialog", so this snapshots the
+    set of currently-open top-level QDialogs on mouse press, then — once
+    Qt's event loop has actually created and shown the new dialog — diffs
+    against that snapshot to find it and applies the stylesheet directly to
+    it. Diffing avoids matching by window title/class name, which is
+    fragile and breaks across QGIS versions/locales.
+    """
+    def __init__(self, style, parent=None):
+        super().__init__(parent)
+        self._style = style
+
+    def eventFilter(self, obj, event):
+        if event.type() == _MOUSE_PRESS:
+            before = {id(w) for w in QApplication.topLevelWidgets() if isinstance(w, QDialog)}
+            QTimer.singleShot(0, lambda: self._style_new_dialogs(before))
+        return False
+
+    def _style_new_dialogs(self, before):
+        for w in QApplication.topLevelWidgets():
+            if isinstance(w, QDialog) and id(w) not in before:
+                w.setStyleSheet(self._style)
+
+
+def _watch_for_crs_popup(widget, style):
+    watcher = _PopupStyleWatcher(style, widget)
+    widget.installEventFilter(watcher)
+    for child in widget.findChildren(QWidget):
+        child.installEventFilter(watcher)
+    widget._popup_watcher = watcher  # keep a reference alive
 
 # ---------------------------------------------------------------------------
 # Secure API key store  — QgsSettings only, never touches plugin files
@@ -574,6 +617,7 @@ class DownloadLidarWidget(QWidget):
         g2.addWidget(_row_label('Output CRS'), row, 0)
         self.crs_widget = QgsProjectionSelectionWidget()
         self.crs_widget.setCrs(QgsCoordinateReferenceSystem.fromEpsgId(2193))
+        _watch_for_crs_popup(self.crs_widget, _CRS_DIALOG_STYLE)
         g2.addWidget(self.crs_widget, row, 1); row += 1
 
         g2.addWidget(_row_label('Output Folder'), row, 0)
