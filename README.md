@@ -51,19 +51,18 @@ original sub-catchments, drainage, and accumulation rasters.
 
 ## Requirements
 
-- QGIS 3.16 or later
-- LINZ Data Service API key (free — for LiDAR download only)
+- Windows; QGIS 3.40 or later (tested on 3.44.2)
+- GRASS provider enabled (Processing → Options → Providers → GRASS GIS)
+- LINZ Data Service API key (free, for LiDAR download only)
 
 ## Installation
 
-### From QGIS Plugin Manager (recommended)
-1. Open QGIS → **Plugins → Manage and Install Plugins**
-2. Search for **Auckland Catchment & Hydrology**
-3. Click **Install**
+This plugin is not published on plugins.qgis.org — install it from the release ZIP.
 
 ### From ZIP
-1. Download the latest ZIP from [Releases](https://github.com/DMagaju/Auckland-Catchment-Hydrology/releases)
+1. Download `AucklandCatchmentHydrology-1.1.0-beta.1.zip` from [Releases](https://github.com/DMagaju/Auckland-Catchment-Hydrology/releases) — **not** the green "Code → Download ZIP" button on the repo page, which has the wrong folder structure.
 2. In QGIS → **Plugins → Manage and Install Plugins → Install from ZIP**
+3. Browse to the downloaded ZIP and click **Install Plugin**
 
 ## LINZ API Key
 
