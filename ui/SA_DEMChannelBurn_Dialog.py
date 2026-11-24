@@ -16,7 +16,7 @@ from qgis.PyQt.QtWidgets import (
 )
 from qgis.core import (
     QgsMapLayerProxyModel, QgsProject, QgsProcessingFeedback,
-    QgsRasterLayer, QgsVectorLayer,
+    QgsRasterLayer, QgsVectorLayer, QgsVectorFileWriter,
 )
 from qgis.gui import QgsMapLayerComboBox
 import processing
@@ -57,6 +57,11 @@ try:
 except AttributeError:
     _RASTER_FILTER = QgsMapLayerProxyModel.RasterLayer
 
+try:
+    _WRITER_NO_ERROR = QgsVectorFileWriter.WriterError.NoError
+except AttributeError:
+    _WRITER_NO_ERROR = QgsVectorFileWriter.NoError
+
 _WIDGET_STYLE = """
     QgsMapLayerComboBox, QComboBox, QDoubleSpinBox {
         background-color: white; color: black;
@@ -64,6 +69,11 @@ _WIDGET_STYLE = """
         padding: 2px 4px; font-size: 11px;
     }
     QComboBox::drop-down { border: none; }
+    QComboBox QAbstractItemView {
+        background-color: white; color: #212121;
+        selection-background-color: #1565C0; selection-color: white;
+        border: 1px solid #B0BEC5;
+    }
     QDoubleSpinBox:disabled { background-color: #ECEFF1; color: #90A4AE; }
 """
 
@@ -76,27 +86,25 @@ _HELP = {
         "Centreline / Draw Burn Lines\n"
         "  Select an existing line layer, or click 'Draw Burn Lines' to create "
         "a 'Burn Line' layer and digitise directly on the map using QGIS's "
-        "standard tools. Each line feature = one channel corridor.\n\n"
+        "standard tools. Each line feature = one channel corridor. If a "
+        "Project Folder is set (Download DEM tab), 'Burn Line' is saved there "
+        "as a real shapefile (Burn_Line.shp), not a temporary memory layer.\n\n"
         "Burn Width (m)\n"
-        "  Total corridor width — half-width each side of the centreline."
-    ),
-    'burning': (
-        "Replace\n"
-        "  Overwrites all corridor pixels to (centreline DEM elevation - burn depth). "
-        "Can raise or lower terrain.\n\n"
-        "Lower-Only\n"
-        "  Same target as Replace, but never raises pixels already below the target. "
-        "Safe default for most workflows.\n\n"
-        "Lower-Only with Tolerance\n"
-        "  Same as Lower-Only but only applies the cut where depth > tolerance. "
-        "Suppresses sub-millimetre edits near feathered edges.\n\n"
-        "Longitudinal Gradient\n"
+        "  Total corridor width — half-width each side of the centreline.\n\n"
+        "Output\n"
+        "  The burned DEM is saved as Burned_DEM.tif in the Project Folder if "
+        "one is set, otherwise as a temporary QGIS scratch layer.\n\n"
+        "Burn Mode — Longitudinal Gradient (fixed)\n"
         "  The DEM is sampled automatically at the start and end vertices of each "
         "burn line to obtain the upstream and downstream reduce levels (RL). A "
         "straight-line invert gradient is then burned between those two sampled "
-        "levels along the full centreline length. Only cuts terrain (Lower-Only).\n"
-        "  Perfect for smoothing an irregular channel bed while preserving the "
-        "existing head and tail elevations."
+        "levels along the full centreline length. Only ever cuts terrain, never "
+        "raises it. No burn depth or tolerance input is needed — both are "
+        "derived automatically from the DEM.\n"
+        "  Note: the underlying tool also supports Replace, Lower-Only and "
+        "Lower-Only-with-Tolerance burn modes (depth-based, rather than "
+        "gradient-based), but this dock only exposes Longitudinal Gradient, "
+        "the mode used for channel work on this project."
     ),
     'edge': (
         "None\n"
@@ -343,55 +351,26 @@ class DEMChannelBurnWidget(QWidget):
 
         g1.addWidget(_row_label('Burn Width (m)'), row, 0)
         self.spin_width = _spinbox(0.1, 9999.0, 10.0, 2, 'm')
-        g1.addWidget(self.spin_width, row, 1)
+        g1.addWidget(self.spin_width, row, 1); row += 1
 
-        bv.addWidget(sec1)
-
-        # ── Section 2: Channel Burning ───────────────────────────────────────
-        sec2, g2 = _section('  Channel Burning', _BLUE, '#EEF4FF', 'burning')
-        row = 0
-
-        g2.addWidget(_row_label('Burn Mode'), row, 0)
-        self.combo_burn = QComboBox()
-        self.combo_burn.addItems([
-            'Replace (overwrite DEM inside corridor)',
-            'Lower-Only (never raises terrain)',
-            'Lower-Only with Tolerance (cut only if > threshold)',
-            'Longitudinal Gradient (linear invert — upstream to downstream RL)',
-        ])
-        self.combo_burn.setCurrentIndex(1)
-        self.combo_burn.currentIndexChanged.connect(self._on_burn_mode_changed)
-        g2.addWidget(self.combo_burn, row, 1); row += 1
-
-        # Burn depth row (hidden in gradient mode)
-        self.lbl_burn_depth = _row_label('Burn Depth (m)')
-        self.spin_depth = _spinbox(0.0, 999.0, 0.5, 3, 'm')
-        g2.addWidget(self.lbl_burn_depth, row, 0)
-        g2.addWidget(self.spin_depth, row, 1); row += 1
-
-        # Tolerance row (visible only for mode 2)
-        self.lbl_tolerance = _row_label('Tolerance Depth (m)')
-        self.spin_tolerance = _spinbox(0.0, 99.0, 0.05, 3, 'm')
-        g2.addWidget(self.lbl_tolerance, row, 0)
-        g2.addWidget(self.spin_tolerance, row, 1); row += 1
-
-        # ── Gradient info label (visible only for mode 3) ───────────────────
+        # Burn mode is fixed to Longitudinal Gradient — no depth/tolerance
+        # inputs needed, both are derived from the DEM automatically.
         self.lbl_gradient_info = QLabel(
-            'The DEM elevation will be sampled automatically at the start and end '
-            'of each burn line. A straight-line gradient is burned between those '
-            'two levels — no manual input required.'
+            'Burn mode: Longitudinal Gradient. The DEM elevation is sampled '
+            'automatically at the start and end of each burn line, and a '
+            'straight-line invert gradient is burned between those two levels — '
+            'no manual depth input required.'
         )
         self.lbl_gradient_info.setWordWrap(True)
         self.lbl_gradient_info.setStyleSheet(
             'font-size: 10px; color: #1B5E20; background: #E8F5E9; '
             'border: 1px solid #A5D6A7; border-radius: 3px; padding: 5px 7px;'
         )
-        self.lbl_gradient_info.setVisible(False)
-        g2.addWidget(self.lbl_gradient_info, row, 0, 1, 2); row += 1
+        g1.addWidget(self.lbl_gradient_info, row, 0, 1, 2); row += 1
 
-        bv.addWidget(sec2)
+        bv.addWidget(sec1)
 
-        # ── Section 3: Edge Treatment ────────────────────────────────────────
+        # ── Section 2: Edge Treatment ────────────────────────────────────────
         sec3, g3 = _section('  Edge Treatment', _SLATE, '#ECEFF1', 'edge')
         row = 0
 
@@ -467,21 +446,9 @@ class DEMChannelBurnWidget(QWidget):
         root.addWidget(footer)
 
         # Apply initial state
-        self._on_burn_mode_changed(self.combo_burn.currentIndex())
         self._toggle_blend(self.combo_edge.currentIndex())
 
     # ── Mode toggles ─────────────────────────────────────────────────────────
-
-    def _on_burn_mode_changed(self, index):
-        is_gradient = (index == 3)
-        # Burn depth row visible for modes 0/1/2
-        self.lbl_burn_depth.setVisible(not is_gradient)
-        self.spin_depth.setVisible(not is_gradient)
-        # Tolerance row visible only for mode 2
-        self.lbl_tolerance.setVisible(index == 2)
-        self.spin_tolerance.setVisible(index == 2)
-        # Gradient info label visible only for mode 3
-        self.lbl_gradient_info.setVisible(is_gradient)
 
     def _toggle_blend(self, index):
         self.spin_blend.setEnabled(index > 0)
@@ -494,6 +461,39 @@ class DEMChannelBurnWidget(QWidget):
                 return lyr
         return None
 
+    def _create_burn_layer(self, crs):
+        """
+        Create the 'Burn Line' layer. If a Project Folder is set (Download
+        DEM tab), writes it as a real shapefile there so it isn't lost when
+        the project closes; otherwise falls back to an in-memory layer.
+        """
+        out_folder = ''
+        try:
+            from ..pipeline_state import get_pipeline_state
+            out_folder = get_pipeline_state('project_folder')
+        except Exception:
+            pass
+
+        if out_folder:
+            try:
+                os.makedirs(out_folder, exist_ok=True)
+                path = os.path.join(out_folder, 'Burn_Line.shp')
+                mem = QgsVectorLayer(f'LineString?crs={crs.authid()}', _BURN_LAYER_NAME, 'memory')
+                opts = QgsVectorFileWriter.SaveVectorOptions()
+                opts.driverName = 'ESRI Shapefile'
+                opts.fileEncoding = 'UTF-8'
+                err = QgsVectorFileWriter.writeAsVectorFormatV3(
+                    mem, path, QgsProject.instance().transformContext(), opts,
+                )
+                if err[0] == _WRITER_NO_ERROR:
+                    lyr = QgsVectorLayer(path, _BURN_LAYER_NAME, 'ogr')
+                    if lyr.isValid():
+                        return lyr
+            except Exception:
+                pass
+
+        return QgsVectorLayer(f'LineString?crs={crs.authid()}', _BURN_LAYER_NAME, 'memory')
+
     def _start_draw(self):
         dem = self.combo_dem.currentLayer()
         if not (dem and dem.isValid()):
@@ -505,10 +505,7 @@ class DEMChannelBurnWidget(QWidget):
 
         burn_layer = self._get_burn_layer()
         if burn_layer is None:
-            burn_layer = QgsVectorLayer(
-                f'LineString?crs={dem.crs().authid()}',
-                _BURN_LAYER_NAME, 'memory',
-            )
+            burn_layer = self._create_burn_layer(dem.crs())
             QgsProject.instance().addMapLayer(burn_layer)
 
         self.iface.setActiveLayer(burn_layer)
@@ -557,6 +554,19 @@ class DEMChannelBurnWidget(QWidget):
                 )
                 return
 
+        out_folder = ''
+        try:
+            from ..pipeline_state import get_pipeline_state
+            out_folder = get_pipeline_state('project_folder')
+        except Exception:
+            pass
+
+        if out_folder:
+            os.makedirs(out_folder, exist_ok=True)
+            out_dem_path = os.path.join(out_folder, 'Burned_DEM.tif')
+        else:
+            out_dem_path = 'TEMPORARY_OUTPUT'
+
         self.btn_run.setEnabled(False)
         self.lbl_status.setText('Running — please wait…')
         self.progress.setValue(0)
@@ -585,12 +595,10 @@ class DEMChannelBurnWidget(QWidget):
                 'INPUT_DEM':  dem,
                 'CENTERLINE': cl_layer,
                 'BURN_WIDTH': self.spin_width.value(),
-                'BURN_DEPTH': self.spin_depth.value(),
-                'BURN_MODE':  self.combo_burn.currentIndex(),
-                'TOLERANCE':  self.spin_tolerance.value(),
+                'BURN_MODE':  3,   # Longitudinal Gradient — the only mode this dock exposes
                 'EDGE_MODE':  self.combo_edge.currentIndex(),
                 'BLEND_DIST': self.spin_blend.value(),
-                'OUTPUT_DEM': 'TEMPORARY_OUTPUT',
+                'OUTPUT_DEM': out_dem_path,
             }
             result = processing.run(self._ALGO_ID, params, feedback=fb)
             self._load_outputs(result)
