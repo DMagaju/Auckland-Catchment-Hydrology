@@ -12,7 +12,7 @@ or shared when the plugin is packaged or copied.
 import json
 import os
 
-from qgis.PyQt.QtCore import Qt, QTimer, QEvent, QObject
+from qgis.PyQt.QtCore import Qt, QTimer
 from qgis.PyQt.QtGui import QColor, QIcon
 from qgis.PyQt.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -128,48 +128,7 @@ except AttributeError:
     _PASSWORD = QLineEdit.Password                   # type: ignore
     _NORMAL   = QLineEdit.Normal                     # type: ignore
 
-try:
-    _MOUSE_PRESS = QEvent.Type.MouseButtonPress
-except AttributeError:
-    _MOUSE_PRESS = QEvent.MouseButtonPress           # type: ignore
-
-
-class _PopupStyleWatcher(QObject):
-    """
-    Installed on a widget (and all its current children) that opens a native
-    Qt dialog when clicked — e.g. QgsProjectionSelectionWidget's CRS picker.
-
-    QGIS's own theme renders some native dialogs (like the CRS selector)
-    almost entirely black, with illegible text, unless explicitly styled.
-    There's no signal for "about to open the dialog", so this snapshots the
-    set of currently-open top-level QDialogs on mouse press, then — once
-    Qt's event loop has actually created and shown the new dialog — diffs
-    against that snapshot to find it and applies the stylesheet directly to
-    it. Diffing avoids matching by window title/class name, which is
-    fragile and breaks across QGIS versions/locales.
-    """
-    def __init__(self, style, parent=None):
-        super().__init__(parent)
-        self._style = style
-
-    def eventFilter(self, obj, event):
-        if event.type() == _MOUSE_PRESS:
-            before = {id(w) for w in QApplication.topLevelWidgets() if isinstance(w, QDialog)}
-            QTimer.singleShot(0, lambda: self._style_new_dialogs(before))
-        return False
-
-    def _style_new_dialogs(self, before):
-        for w in QApplication.topLevelWidgets():
-            if isinstance(w, QDialog) and id(w) not in before:
-                w.setStyleSheet(self._style)
-
-
-def _watch_for_crs_popup(widget, style):
-    watcher = _PopupStyleWatcher(style, widget)
-    widget.installEventFilter(watcher)
-    for child in widget.findChildren(QWidget):
-        child.installEventFilter(watcher)
-    widget._popup_watcher = watcher  # keep a reference alive
+from ..dialog_style import watch_for_popup
 
 # ---------------------------------------------------------------------------
 # Secure API key store  — QgsSettings only, never touches plugin files
@@ -309,11 +268,21 @@ _HELP = {
     "Output CRS\n"
     "  Coordinate Reference System for the output raster.\n"
     "  Default: EPSG:2193 (NZTM2000) — the standard NZ projection.\n"
-    "  Selecting another CRS will reproject the raster on the fly.\n\n"
-    "Output Folder\n"
-    "  Parent folder where a timestamped subfolder 'LINZ_YYYYMMDD_HHMMSS' is\n"
-    "  created automatically. All files for this run are placed inside it.\n"
-    "  Default: ~/Downloads"
+    "  Selecting another CRS will reproject the raster on the fly."
+),
+
+'project_folder': (
+    "Project Folder\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    "The working folder for this project. Two things use it:\n\n"
+    "  1. Download LiDAR DEM — a timestamped subfolder "
+    "'LINZ_YYYYMMDD_HHMMSS' is created inside it, and all downloaded files "
+    "for this run are placed there.\n\n"
+    "  2. Later steps in the pipeline (e.g. Streams and Catchment — flow "
+    "accumulation and flow direction rasters) default to saving their "
+    "generated files here too, instead of QGIS's temporary scratch folder, "
+    "so everything for one project ends up in one place.\n\n"
+    "Default: ~/Downloads"
 ),
 
 'api': (
@@ -565,6 +534,33 @@ class DownloadLidarWidget(QWidget):
         bv.setContentsMargins(14, 14, 14, 14)
         bv.setSpacing(10)
 
+        # ── Section 0: Project Folder ────────────────────────────────────────
+        sec0, g0 = _section('  Project Folder', _SLATE, '#F5F7F8', _HELP['project_folder'])
+        row = 0
+
+        g0.addWidget(_row_label('Project Folder'), row, 0)
+        folder_row = QHBoxLayout()
+        self.le_folder = QLineEdit()
+        self.le_folder.setPlaceholderText(
+            os.path.join(os.path.expanduser('~'), 'Downloads')
+        )
+        self.le_folder.editingFinished.connect(self._save_project_folder)
+        btn_folder = _icon_btn('…', 'Browse for project folder')
+        btn_folder.clicked.connect(self._browse_folder)
+        folder_row.addWidget(self.le_folder)
+        folder_row.addWidget(btn_folder)
+        g0.addLayout(folder_row, row, 1); row += 1
+
+        try:
+            from ..pipeline_state import get_pipeline_state
+            saved_folder = get_pipeline_state('project_folder')
+            if saved_folder:
+                self.le_folder.setText(saved_folder)
+        except Exception:
+            pass
+
+        bv.addWidget(sec0)
+
         # ── Section 1: Area & Resolution ─────────────────────────────────────
         sec1, g1 = _section('  Area & Resolution', _BLUE, '#EEF4FF', _HELP['area'])
         row = 0
@@ -617,20 +613,8 @@ class DownloadLidarWidget(QWidget):
         g2.addWidget(_row_label('Output CRS'), row, 0)
         self.crs_widget = QgsProjectionSelectionWidget()
         self.crs_widget.setCrs(QgsCoordinateReferenceSystem.fromEpsgId(2193))
-        _watch_for_crs_popup(self.crs_widget, _CRS_DIALOG_STYLE)
+        watch_for_popup(self.crs_widget, _CRS_DIALOG_STYLE)
         g2.addWidget(self.crs_widget, row, 1); row += 1
-
-        g2.addWidget(_row_label('Output Folder'), row, 0)
-        folder_row = QHBoxLayout()
-        self.le_folder = QLineEdit()
-        self.le_folder.setPlaceholderText(
-            os.path.join(os.path.expanduser('~'), 'Downloads')
-        )
-        btn_folder = _icon_btn('…', 'Browse for output folder')
-        btn_folder.clicked.connect(self._browse_folder)
-        folder_row.addWidget(self.le_folder)
-        folder_row.addWidget(btn_folder)
-        g2.addLayout(folder_row, row, 1)
 
         bv.addWidget(sec2)
 
@@ -957,11 +941,19 @@ class DownloadLidarWidget(QWidget):
 
     def _browse_folder(self):
         folder = QFileDialog.getExistingDirectory(
-            self, 'Select Output Folder',
+            self, 'Select Project Folder',
             self.le_folder.text() or os.path.expanduser('~'),
         )
         if folder:
             self.le_folder.setText(folder)
+            self._save_project_folder()
+
+    def _save_project_folder(self):
+        try:
+            from ..pipeline_state import save_pipeline_state
+            save_pipeline_state('project_folder', self.le_folder.text().strip())
+        except Exception:
+            pass
 
     def _run(self):
         ext = self.extent_widget.outputExtent()
@@ -977,6 +969,7 @@ class DownloadLidarWidget(QWidget):
         out_folder = self.le_folder.text().strip() or os.path.join(
             os.path.expanduser('~'), 'Downloads'
         )
+        self._save_project_folder()
         api_key = self.le_api.text().strip()
 
         self.btn_run.setEnabled(False)
