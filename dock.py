@@ -13,6 +13,10 @@ Tabs (in order):
   8.  Time of Concentration
   9.  Flow Calculation [TP108]
   (10. Catchment Loading — disabled, code kept in SA_Loading_Dialog.py)
+
+  Generate Rainfall Data tab (SA_RainfallData_Dialog.py) is written but
+  not yet wired in here — removed from the dock until its scope is
+  defined; re-add between Time of Concentration and Flow Calculation.
 """
 
 from qgis.PyQt.QtCore import Qt, QSize, pyqtSignal
