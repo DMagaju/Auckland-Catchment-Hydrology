@@ -10,7 +10,7 @@ simplified polyline.  No stream vector layer is required.
 
 __author__  = "Dipendra Magaju"
 __version__ = "V02"
-__status__  = "Stable"
+__status__  = "Beta"
 
 import math
 from collections import deque

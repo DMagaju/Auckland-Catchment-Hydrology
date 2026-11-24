@@ -10,7 +10,7 @@ __author__     = "Dipendra Magaju"
 __copyright__  = "2026"
 __license__    = "GPL"
 __version__    = "V03"
-__status__     = "Stable"
+__status__     = "Beta"
 _LINKED_PROMPT = "SCH_SubcatchFlowCalculationToolDevelopmentPrompt_GM.txt"
 
 from qgis.PyQt.QtCore import QCoreApplication, QVariant

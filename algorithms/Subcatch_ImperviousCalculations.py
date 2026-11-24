@@ -41,7 +41,7 @@ To use this script:
 
 __author__  = "Dipendra Magaju"
 __version__ = "V01"
-__status__  = "Stable"
+__status__  = "Beta"
 
 
 # Imports

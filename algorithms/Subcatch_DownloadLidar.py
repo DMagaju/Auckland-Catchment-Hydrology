@@ -57,7 +57,7 @@ __copyright__ = "2025"
 __license__ = "GPL"
 __version__ = "V01"
 __email__ = ""
-__status__ = "Stable"
+__status__ = "Beta"
 _LINKED_PROMPT = 'TM_Download_LiDAR_V01_GM.txt'
 
 from qgis.PyQt.QtCore import QCoreApplication

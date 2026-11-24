@@ -10,7 +10,7 @@ __author__     = "Dipendra Magaju"
 __copyright__  = "2026"
 __license__    = "GPL"
 __version__    = "V01"
-__status__     = "Stable"
+__status__     = "Beta"
 _LINKED_PROMPT = "SCH_SubcatchmentMergeSplitEditorPrompt_GM.txt"
 
 from qgis.PyQt.QtCore import QCoreApplication, Qt, pyqtSignal, QObject, QTimer

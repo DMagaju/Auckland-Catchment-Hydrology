@@ -6,7 +6,7 @@ Runs r.watershed once and produces both outputs in a single pass.
 
 __author__  = "Dipendra Magaju"
 __version__ = "V01"
-__status__  = "Stable"
+__status__  = "Beta"
 
 from qgis.PyQt.QtCore import QCoreApplication
 from qgis.core import (

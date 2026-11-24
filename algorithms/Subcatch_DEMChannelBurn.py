@@ -20,7 +20,7 @@ Tested On: QGIS 3.44.2
 
 __author__  = "Dipendra Magaju"
 __version__ = "V01"
-__status__  = "Stable"
+__status__  = "Beta"
 
 import os
 import math
