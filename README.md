@@ -1,5 +1,23 @@
 # Auckland Catchment & Hydrology
 
+> **⚠️ Beta (v1.1.0-beta.1)** — under active development. The Longest Flow Path
+> step is validated against GRASS r.watershed (see `tests/`); Time of Concentration
+> and TP108 Flow Calculation have not yet been independently verified against
+> worked examples. Results must be checked by a suitably qualified engineer before
+> use in design. Not affiliated with or endorsed by Auckland Council.
+> Please report issues on GitHub.
+
+### Tested platforms
+| QGIS version | Windows | Linux | macOS |
+|---|---|---|---|
+| 3.44.2 | ✅ Tested (full workflow) | ❌ Not tested | ❌ Not tested |
+| 3.40 LTR | ⚠️ Expected to work, not tested | ❌ Not tested | ❌ Not tested |
+| 4.x (Qt6) | ⚠️ Not yet tested | ❌ Not tested | ❌ Not tested |
+
+> This beta is supported on **Windows only**. Linux and macOS have not been tested —
+> GRASS GIS setup and file paths differ on those platforms and some tools may not work.
+> If you try it on another platform or QGIS version, please report results via GitHub Issues.
+
 A QGIS plugin providing a complete hydrology workflow for subcatchment delineation, flow path analysis, and TP108/SWCoP V4 flow calculation. Designed for Auckland-region stormwater assessments.
 
 ## ⚠️ Known issue in V01
@@ -70,6 +88,15 @@ The tools are designed to run in sequence via the side panel:
 9. **Flow Calculation** → compute peak flows per ARI
 
 Each tab auto-fills inputs from the previous step's outputs.
+
+## Disclaimer
+
+This software is provided "as is", without warranty of any kind, express or
+implied — including, but not limited to, the warranties of merchantability,
+fitness for a particular purpose, and noninfringement. In no event shall the
+author be liable for any claim, damages, or other liability arising from the
+use of this software. Use it at your own risk, and have an engineer check
+the results before relying on them for design.
 
 ## License
 
