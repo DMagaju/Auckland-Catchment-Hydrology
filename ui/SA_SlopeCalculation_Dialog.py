@@ -67,6 +67,11 @@ _WIDGET_STYLE = """
         padding: 2px 4px; font-size: 11px;
     }
     QComboBox::drop-down { border: none; }
+    QComboBox QAbstractItemView {
+        background-color: white; color: #212121;
+        selection-background-color: #1565C0; selection-color: white;
+        border: 1px solid #B0BEC5;
+    }
     QgsFieldComboBox { background-color: white; color: black;
         border: 1px solid #B0BEC5; border-radius: 3px;
         padding: 2px 4px; font-size: 11px; }
@@ -95,7 +100,12 @@ _HELP = {
         "  'User-specified interval' densifies the flow path at the given spacing "
         "before sampling the DEM.  A smaller interval increases accuracy but is slower.\n\n"
         "Output Plot Folder (optional)\n"
-        "  When provided, a PNG elevation profile is saved for each flow path."
+        "  When provided, a PNG elevation profile is saved for each flow path.\n"
+        "  Defaults to a 'Slope Calculation' subfolder inside the Project Folder\n"
+        "  (Download DEM tab). In 'New output file' mode, the output catchment\n"
+        "  layer is also saved there (Slope_Catchments.shp) instead of a\n"
+        "  temporary scratch layer. Clear this field to go back to temporary\n"
+        "  output and no plots."
     ),
 }
 
@@ -334,6 +344,12 @@ class SlopeCalculationWidget(QWidget):
         except AttributeError:
             self.fw_plots.setStorageMode(QgsFileWidget.GetDirectory)
         self.fw_plots.setFilePath('')
+        self.fw_plots.setToolTip(
+            'Defaults to a "Slope Calculation" subfolder inside the Project\n'
+            'Folder (Download DEM tab). Output catchments (New output file\n'
+            'mode) are saved there too, instead of a temporary scratch layer.'
+        )
+        self._prefill_plot_folder()
         g2.addWidget(self.fw_plots, row, 1)
 
         bv.addWidget(sec2)
@@ -453,7 +469,11 @@ class SlopeCalculationWidget(QWidget):
                 'OUTPUT_MODE':        output_mode,
             }
             if output_mode == 0:
-                params['OUTPUT_CATCHMENTS'] = 'TEMPORARY_OUTPUT'
+                if plot_folder:
+                    os.makedirs(plot_folder, exist_ok=True)
+                    params['OUTPUT_CATCHMENTS'] = os.path.join(plot_folder, 'Slope_Catchments.shp')
+                else:
+                    params['OUTPUT_CATCHMENTS'] = 'TEMPORARY_OUTPUT'
             if plot_folder:
                 params['OUTPUT_PLOT_FOLDER'] = plot_folder
 
@@ -475,7 +495,21 @@ class SlopeCalculationWidget(QWidget):
         finally:
             self.btn_run.setEnabled(True)
 
+    def _prefill_plot_folder(self):
+        """Default Plot Output Folder to '<Project Folder>/Slope Calculation'
+        whenever this field is still empty."""
+        if self.fw_plots.filePath().strip():
+            return
+        try:
+            from ..pipeline_state import get_pipeline_state
+            project_folder = get_pipeline_state('project_folder')
+            if project_folder:
+                self.fw_plots.setFilePath(os.path.join(project_folder, 'Slope Calculation'))
+        except Exception:
+            pass
+
     def refresh_inputs(self):
+        self._prefill_plot_folder()
         try:
             from ..pipeline_state import set_combo_to_layer, get_pipeline_state
             set_combo_to_layer(self.combo_flowpath,  'flow_paths')
