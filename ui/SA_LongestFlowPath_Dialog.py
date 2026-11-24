@@ -86,6 +86,11 @@ _WIDGET_STYLE = """
         font-size: 11px;
     }
     QComboBox::drop-down { border: none; }
+    QComboBox QAbstractItemView {
+        background-color: white; color: #212121;
+        selection-background-color: #1565C0; selection-color: white;
+        border: 1px solid #B0BEC5;
+    }
     QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 16px; }
 """
 
@@ -102,7 +107,11 @@ _HELP = {
         "Prerequisites:\n"
         "• Run 'Stream and Catchment Generator' first to produce the drainage "
         "direction raster\n"
-        "• DEM CRS must be projected and use metres (e.g. EPSG:2193 NZTM)"
+        "• DEM CRS must be projected and use metres (e.g. EPSG:2193 NZTM)\n\n"
+        "Output\n"
+        "The result is saved as Longest_Flow_Path.shp in the Project Folder "
+        "(Download DEM tab) if one is set, otherwise as a temporary QGIS "
+        "scratch layer."
     ),
     'inputs': (
         "Sub-catchment Polygons\n"
@@ -529,6 +538,19 @@ class LongestFlowPathWidget(QWidget):
 
         fb = _FB(self.progress, self.lbl_status)
 
+        out_folder = ''
+        try:
+            from ..pipeline_state import get_pipeline_state
+            out_folder = get_pipeline_state('project_folder')
+        except Exception:
+            pass
+
+        if out_folder:
+            os.makedirs(out_folder, exist_ok=True)
+            out_path = os.path.join(out_folder, 'Longest_Flow_Path.shp')
+        else:
+            out_path = 'TEMPORARY_OUTPUT'
+
         try:
             params = {
                 'INPUT_SUBCATCHMENTS': subcat,
@@ -537,7 +559,7 @@ class LongestFlowPathWidget(QWidget):
                 'SIMPLIFY_TOLERANCE':  self.sb_simplify.value(),
                 'MIN_AREA_HA':         self.sb_min_area.value(),
                 'EXTEND_ALONG_STREAM': self.cb_extend_stream.isChecked(),
-                'OUTPUT':              'TEMPORARY_OUTPUT',
+                'OUTPUT':              out_path,
             }
 
             streams_lyr = self.combo_streams.currentLayer()
