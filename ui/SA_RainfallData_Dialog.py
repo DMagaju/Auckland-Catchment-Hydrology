@@ -100,7 +100,7 @@ class RainfallDataWidget(QWidget):
             _qgis_ver = Qgis.QGIS_VERSION.split('-')[0]
         except Exception:
             _qgis_ver = '—'
-        ver_lbl = QLabel(f'Developer: D Magaju   ·   Version: {__version__}   ·   QGIS: {_qgis_ver}')
+        ver_lbl = QLabel(f'Developer: D Magaju   ·   Version: Beta-01   ·   QGIS: {_qgis_ver}')
         ver_lbl.setAlignment(_AlignCenter)
         ver_lbl.setStyleSheet('font-size: 9px; color: #90A4AE; background: transparent;')
         fl.addWidget(ver_lbl)

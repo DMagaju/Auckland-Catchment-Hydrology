@@ -912,15 +912,11 @@ class StreamCatchmentWidget(QWidget):
         )
 
         try:
-            from ..algorithms.Subcatch_StreamCatchment import __version__ as _ver
-        except Exception:
-            _ver = __version__
-        try:
             from qgis.core import Qgis
             _qv = Qgis.QGIS_VERSION.split('-')[0]
         except Exception:
             _qv = '-'
-        ver_lbl = QLabel(f'Developer: D Magaju   ·   Version: {_ver}   ·   QGIS: {_qv}')
+        ver_lbl = QLabel(f'Developer: D Magaju   ·   Version: Beta-01   ·   QGIS: {_qv}')
         ver_lbl.setAlignment(_AlignCenter)
         ver_lbl.setStyleSheet('font-size: 9px; color: #90A4AE; background: transparent;')
         footer.layout().addWidget(ver_lbl)

@@ -301,15 +301,11 @@ class NamingWidget(QWidget):
         fv.addLayout(btn_row)
 
         try:
-            from ..algorithms.Subcatch_Naming import __version__ as _algo_ver
-        except Exception:
-            _algo_ver = __version__
-        try:
             from qgis.core import Qgis
             _qgis_ver = Qgis.QGIS_VERSION.split('-')[0]
         except Exception:
             _qgis_ver = '—'
-        ver_lbl = QLabel(f'Developer: D Magaju   ·   Version: {_algo_ver}   ·   QGIS: {_qgis_ver}')
+        ver_lbl = QLabel(f'Developer: D Magaju   ·   Version: Beta-01   ·   QGIS: {_qgis_ver}')
         ver_lbl.setAlignment(_AlignCenter)
         ver_lbl.setStyleSheet('font-size: 9px; color: #90A4AE; background: transparent;')
         fv.addWidget(ver_lbl)

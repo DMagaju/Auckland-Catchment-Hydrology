@@ -709,15 +709,11 @@ class DownloadLidarWidget(QWidget):
 
         # Version strip
         try:
-            from ..algorithms.Subcatch_DownloadLidar import __version__ as _ver
-        except Exception:
-            _ver = 'V01'
-        try:
             _qgis_ver = Qgis.QGIS_VERSION.split('-')[0]
         except Exception:
             _qgis_ver = '—'
         ver_lbl = QLabel(
-            f'Developer: D Magaju   ·   Version: {_ver}   ·   QGIS: {_qgis_ver}'
+            f'Developer: D Magaju   ·   Version: Beta-01   ·   QGIS: {_qgis_ver}'
         )
         ver_lbl.setAlignment(_ALIGN_C)
         ver_lbl.setStyleSheet('font-size: 9px; color: #90A4AE; background: transparent;')
