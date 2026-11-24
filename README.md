@@ -88,6 +88,24 @@ The tools are designed to run in sequence via the side panel:
 
 Each tab auto-fills inputs from the previous step's outputs.
 
+## How to run the tests (Windows)
+
+The Longest Flow Path validation suite (`tests/test_longest_flow_path.py`)
+runs real GRASS `r.watershed` via QGIS Processing — no QGIS GUI needed, but
+it does need a full `QgsApplication` plus the GRASS provider.
+
+Run it with QGIS's own bundled Python, not a plain `python`:
+
+```
+"C:\Program Files\QGIS 3.44\bin\python-qgis-qt6.bat" tests\test_longest_flow_path.py
+```
+
+(adjust the QGIS install path to match your machine). It should finish with
+`ALL TESTS PASSED: True` and a 5/5 summary. All paths it needs are either
+auto-detected or overridable with environment variables — see the module
+docstring at the top of the file for `QGIS_PREFIX_PATH`, `ACH_PLUGINS_PARENT`,
+`ACH_GRASS_BAT` and `ACH_GRASS_DIR`.
+
 ## Disclaimer
 
 This software is provided "as is", without warranty of any kind, express or

@@ -13,6 +13,15 @@ the only thing that should need changing.
 
 Run with:
     "<QGIS install>/bin/python-qgis-qt6.bat" tests/test_longest_flow_path.py
+
+Environment variables (all optional, sensible defaults for this machine):
+    QGIS_PREFIX_PATH   QGIS install's apps/qgis-qt6 folder
+    ACH_PLUGINS_PARENT Folder containing the AucklandCatchmentHydrology
+                        plugin folder (defaults to two levels above this
+                        file, i.e. the Plugins folder it normally lives in)
+    ACH_GRASS_BAT       Path to the GRASS launcher .bat (only needed if
+                        GrassUtils can't auto-detect it on your install)
+    ACH_GRASS_DIR       Path to the GRASS install folder (same caveat)
 """
 import sys
 import os
@@ -22,7 +31,10 @@ import tempfile
 import csv
 
 QGIS_PREFIX = os.environ.get('QGIS_PREFIX_PATH', r"C:\Program Files\QGISQT6 3.44.2\apps\qgis-qt6")
-PLUGINS_PARENT = r"G:\My Drive\01_Professional\05_Codes\Plugins"
+PLUGINS_PARENT = os.environ.get(
+    'ACH_PLUGINS_PARENT',
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+)
 
 sys.path.insert(0, os.path.join(QGIS_PREFIX, 'python', 'plugins'))
 sys.path.insert(0, PLUGINS_PARENT)
@@ -36,16 +48,24 @@ import numpy as np
 from osgeo import gdal, ogr, osr
 
 import processing
-from grassprovider.grass_utils import GrassUtils
+try:
+    from grassprovider.grass_utils import GrassUtils
+except ImportError:
+    from grassprovider.Grass7Utils import Grass7Utils as GrassUtils
 # --- environment-specific GRASS auto-detect workaround (see module docstring) ---
-_GRASS_BAT = r"C:\Program Files\QGISQT6 3.44.2\bin\grass84.bat"
-_GRASS_DIR = r"C:\Program Files\QGISQT6 3.44.2\apps\grass\grass84"
+_GRASS_BAT = os.environ.get('ACH_GRASS_BAT', r"C:\Program Files\QGISQT6 3.44.2\bin\grass84.bat")
+_GRASS_DIR = os.environ.get('ACH_GRASS_DIR', r"C:\Program Files\QGISQT6 3.44.2\apps\grass\grass84")
 if os.path.isfile(_GRASS_BAT):
     GrassUtils.command = _GRASS_BAT
 if os.path.isdir(_GRASS_DIR):
     GrassUtils.path = _GRASS_DIR
 from processing.core.Processing import Processing
 Processing.initialize()
+_WATERSHED_ALGO = (
+    "grass:r.watershed"
+    if QgsApplication.processingRegistry().algorithmById("grass:r.watershed")
+    else "grass7:r.watershed"
+)
 # ----------------------------------------------------------------------------
 
 from qgis.core import (
@@ -89,7 +109,7 @@ def run_watershed(dem_path, n_x, n_y, gt, threshold, tmp):
     assert dem_layer.isValid(), f"invalid DEM layer at {dem_path}"
     extent = QgsRectangle(gt[0], gt[3] + n_y * gt[5], gt[0] + n_x * gt[1], gt[3])
     processing.run(
-        "grass:r.watershed",
+        _WATERSHED_ALGO,
         {
             'elevation': dem_layer,
             'threshold': threshold,
