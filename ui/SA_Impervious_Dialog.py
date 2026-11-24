@@ -423,6 +423,11 @@ class ImperviousWidget(QWidget):
             }
             QComboBox::drop-down { border: none; }
             QComboBox::down-arrow { width: 12px; height: 12px; }
+            QComboBox QAbstractItemView {
+                background-color: white; color: #212121;
+                selection-background-color: #1565C0; selection-color: white;
+                border: 1px solid #B0BEC5;
+            }
             QSpinBox::up-button, QSpinBox::down-button { width: 16px; }
             QCheckBox { color: #212121; font-size: 11px; }
         """)

@@ -57,6 +57,11 @@ _WIDGET_STYLE = """
         padding: 2px 4px; font-size: 11px;
     }
     QComboBox::drop-down { border: none; }
+    QComboBox QAbstractItemView {
+        background-color: white; color: #212121;
+        selection-background-color: #1565C0; selection-color: white;
+        border: 1px solid #B0BEC5;
+    }
 """
 
 _HELP = {
